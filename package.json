@@ -1,0 +1,24 @@
+{
+  "name": "tiddlywiki-nmem-importer",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "npm@11.13.0",
+  "engines": {
+    "node": "24.16.0"
+  },
+  "scripts": {
+    "test": "nub --test test/*.test.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "tiddlywiki": "5.4.0",
+    "turndown": "7.2.4",
+    "turndown-plugin-gfm": "1.0.2"
+  },
+  "devDependencies": {
+    "@types/node": "24.13.3",
+    "@types/turndown": "5.0.6",
+    "typescript": "7.0.2"
+  }
+}
