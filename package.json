@@ -1,22 +1,56 @@
 {
-  "name": "tiddlywiki-nmem-importer",
+  "name": "tiddlynmem",
   "version": "0.1.0",
-  "private": true,
+  "description": "Import TiddlyWiki tiddlers into Nowledge Mem as Markdown memories.",
+  "author": {
+    "name": "Thaddeus Jiang",
+    "email": "thaddeusjiang@gmail.com",
+    "url": "https://github.com/ThaddeusJiang"
+  },
+  "license": "Apache-2.0",
   "type": "module",
+  "bin": {
+    "tiddlynmem": "dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "CHANGELOG.md"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "keywords": [
+    "tiddlywiki",
+    "nowledge-mem",
+    "markdown",
+    "cli"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ThaddeusJiang/tiddlynmem.git"
+  },
+  "bugs": {
+    "url": "https://github.com/ThaddeusJiang/tiddlynmem/issues"
+  },
+  "homepage": "https://github.com/ThaddeusJiang/tiddlynmem#readme",
   "packageManager": "npm@11.13.0",
   "engines": {
-    "node": "24.16.0"
+    "node": ">=24.16.0"
   },
   "scripts": {
+    "build": "nub scripts/build-package.ts",
+    "check:package": "nub scripts/check-package.ts",
+    "prepack": "npm run typecheck && npm test && npm run build && npm run check:package",
     "test": "nub --test test/*.test.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "tiddlywiki": "5.4.0",
+    "tiddlywiki": "5.4.1",
     "turndown": "7.2.4",
     "turndown-plugin-gfm": "1.0.2"
   },
   "devDependencies": {
+    "@nubjs/nub": "0.7.5",
     "@types/node": "24.13.3",
     "@types/turndown": "5.0.6",
     "typescript": "7.0.2"

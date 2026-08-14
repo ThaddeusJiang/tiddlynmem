@@ -1,7 +1,12 @@
 import { tmpdir } from "node:os";
 import { createRequire } from "node:module";
 
-import { toIsoTimestamp, type TiddlerRecord } from "./core.ts";
+import {
+  classifyTiddler,
+  parseTagString,
+  toIsoTimestamp,
+  type TiddlerRecord,
+} from "./core.ts";
 
 interface TiddlyWikiFields {
   [key: string]: unknown;
@@ -33,6 +38,8 @@ const { TiddlyWiki } = require("tiddlywiki/boot/boot.js") as {
   TiddlyWiki(): TiddlyWikiRuntime;
 };
 const wikiPath = process.argv[2];
+const selectedTag = process.argv[3] ?? "";
+const includeSensitive = process.argv[4] === "true";
 
 if (!wikiPath) {
   throw new Error("A TiddlyWiki path is required.");
@@ -78,6 +85,16 @@ tw.boot.boot(() => {
     }
 
     const fields = tiddler.fields;
+    if (
+      selectedTag &&
+      !parseTagString(
+        typeof fields.tags === "string" || Array.isArray(fields.tags)
+          ? fields.tags
+          : [],
+      ).includes(selectedTag)
+    ) {
+      continue;
+    }
     const record: TiddlerRecord = {
       created: toIsoTimestamp(fields.created),
       draftOf:
@@ -100,8 +117,7 @@ tw.boot.boot(() => {
     };
 
     if (
-      !title.startsWith("$:/") &&
-      record.text.trim() &&
+      classifyTiddler(record, { includeSensitive }) === "ready" &&
       (record.type === "text/vnd.tiddlywiki" || record.type === "")
     ) {
       try {

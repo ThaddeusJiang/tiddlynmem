@@ -1,9 +1,11 @@
 import { createHash } from "node:crypto";
+import { basename, resolve } from "node:path";
 
 import TurndownService from "turndown";
 import { gfm } from "turndown-plugin-gfm";
 
 const DNS_NAMESPACE = "6ba7b810-9dad-11d1-80b4-00c04fd430c8";
+export const NOWLEDGE_MEM_TAG = "$:/NowledgeMem";
 const IMPORTABLE_TYPES = new Set([
   "",
   "text/markdown",
@@ -26,9 +28,15 @@ export interface TiddlerRecord {
   type?: string;
 }
 
+export interface MarkdownMediaResult {
+  markdown: string;
+  warnings: string[];
+}
+
 export type TiddlerClassification =
   | "draft"
   | "empty"
+  | "imported"
   | "ready"
   | "sensitive"
   | "system"
@@ -79,6 +87,9 @@ export function classifyTiddler(
   if (tiddler.draftOf || tiddler.draftTitle) {
     return "draft";
   }
+  if (parseTagString(tiddler.tags).includes(NOWLEDGE_MEM_TAG)) {
+    return "imported";
+  }
   if (!(tiddler.text ?? "").trim()) {
     return "empty";
   }
@@ -91,11 +102,11 @@ export function classifyTiddler(
   return "ready";
 }
 
-export function stableMemoryId(sourceWiki: string, title: string): string {
+export function stableMemoryId(wikiId: string, title: string): string {
   const namespace = Buffer.from(DNS_NAMESPACE.replaceAll("-", ""), "hex");
   const digest = createHash("sha1")
     .update(namespace)
-    .update(`tiddlywiki-nmem-importer\0${sourceWiki}\0${title}`, "utf8")
+    .update(`tiddlywiki-nmem-importer\0${wikiId}\0${title}`, "utf8")
     .digest()
     .subarray(0, 16);
 
@@ -110,6 +121,20 @@ export function stableMemoryId(sourceWiki: string, title: string): string {
     hex.slice(16, 20),
     hex.slice(20),
   ].join("-");
+}
+
+export function resolveWikiId(wikiPath: string, override = ""): string {
+  const explicit = override.trim();
+  if (explicit) {
+    return explicit;
+  }
+  const resolvedPath = resolve(wikiPath).normalize("NFC");
+  const name = basename(resolvedPath).normalize("NFKC") || "wiki";
+  const fingerprint = createHash("sha256")
+    .update(resolvedPath, "utf8")
+    .digest("hex")
+    .slice(0, 12);
+  return `${name}-${fingerprint}`;
 }
 
 export function toIsoTimestamp(value?: Date | string | null): string {
@@ -178,18 +203,19 @@ export function htmlToMarkdown(html: string): string {
 export function findMediaReferences(html: string): string[] {
   const references: string[] = [];
   const seen = new Set<string>();
-  const pattern = /<img\b[^>]*\bsrc=(?:"([^"]*)"|'([^']*)')[^>]*>/giu;
+  const pattern =
+    /<img\b[^>]*\bsrc=(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+))[^>]*>/giu;
   let match;
 
   while ((match = pattern.exec(html)) !== null) {
-    const source = match[1] ?? match[2] ?? "";
+    const source = match[1] ?? match[2] ?? match[3] ?? "";
     let reference = "";
-    if (source.startsWith("data:")) {
+    if (/^data:/iu.test(source)) {
       reference = `embedded:${source.slice(5).split(/[;,]/u, 1)[0]}`;
     } else if (
       source &&
-      !source.startsWith("https://") &&
-      !source.startsWith("http://")
+      !/^https?:\/\//iu.test(source) &&
+      !source.startsWith("//")
     ) {
       reference = `local:${source}`;
     }
@@ -202,21 +228,140 @@ export function findMediaReferences(html: string): string[] {
   return references;
 }
 
-export function buildMemoryMarkdown(
-  tiddler: TiddlerRecord,
-  sourceWiki: string,
-  body: string,
-): string {
-  const tags = parseTagString(tiddler.tags);
-  const metadata = [
-    "---",
-    `tiddlywiki_source: ${JSON.stringify(sourceWiki)}`,
-    `tiddlywiki_title: ${JSON.stringify(tiddler.title)}`,
-    `tiddlywiki_tags: ${JSON.stringify(tags)}`,
-    `tiddlywiki_created: ${JSON.stringify(toIsoTimestamp(tiddler.created))}`,
-    `tiddlywiki_modified: ${JSON.stringify(toIsoTimestamp(tiddler.modified))}`,
-    "---",
-  ].join("\n");
+export function sanitizeMarkdownMedia(markdown: string): MarkdownMediaResult {
+  const warnings: string[] = [];
+  const seen = new Set<string>();
+  const imagePattern =
+    /!\[([^\]\r\n]*)\]\(\s*(?:<([^>\r\n]+)>|([^\s)\r\n]+))(?:\s+(?:"[^"\r\n]*"|'[^'\r\n]*'|\([^\)\r\n]*\)))?\s*\)/giu;
+  const referenceImagePattern = /!\[([^\]\r\n]*)\]\[([^\]\r\n]*)\]/gu;
+  const shortcutReferenceImagePattern = /!\[([^\]\r\n]+)\](?![\[(])/gu;
+  const referenceDefinitionPattern =
+    /^ {0,3}\[([^\]\r\n]+)\]:[ \t]*(?:<([^>\r\n]+)>|([^ \t\r\n]+))(?:[ \t]+.*)?$/gmu;
+  const rawImagePattern =
+    /<img\b[^>]*\bsrc=(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+))[^>]*>/giu;
+  const definitions = new Map<string, string>();
+  const referencedLabels = new Set<string>();
+  const normalizeReference = (value: string): string =>
+    value.trim().replace(/\s+/gu, " ").toLowerCase();
+  for (const match of markdown.matchAll(referenceDefinitionPattern)) {
+    definitions.set(
+      normalizeReference(match[1] ?? ""),
+      (match[2] ?? match[3] ?? "").trim(),
+    );
+  }
+  const addWarning = (warning: string): void => {
+    if (!seen.has(warning)) {
+      seen.add(warning);
+      warnings.push(warning);
+    }
+  };
+  const warningForSource = (source: string): string => {
+    if (/^data:/iu.test(source)) {
+      const mediaType = source.slice(5).split(/[;,]/u, 1)[0] || "unknown";
+      return `embedded:${mediaType}`;
+    }
+    if (source && !/^https?:\/\//iu.test(source) && !source.startsWith("//")) {
+      return `local:${source}`;
+    }
+    return "";
+  };
+  const embeddedImageMarker = (alt: string): string => {
+    const label = alt.trim();
+    return label ? `[Embedded image: ${label}]` : "[Embedded image omitted]";
+  };
 
-  return `${metadata}\n\n${body.trim()}\n`;
+  let sanitized = markdown.replace(
+    imagePattern,
+    (match, alt: string, angledSource?: string, bareSource?: string) => {
+      const source = (angledSource ?? bareSource ?? "").trim();
+      const warning = warningForSource(source);
+      if (warning) {
+        addWarning(warning);
+      }
+      if (/^data:/iu.test(source)) {
+        return embeddedImageMarker(alt);
+      }
+      return match;
+    },
+  );
+
+  sanitized = sanitized.replace(
+    referenceImagePattern,
+    (match, alt: string, reference: string) => {
+      const label = normalizeReference(reference || alt);
+      const source = definitions.get(label);
+      if (!source) {
+        return match;
+      }
+      referencedLabels.add(label);
+      const warning = warningForSource(source);
+      if (warning) {
+        addWarning(warning);
+      }
+      return /^data:/iu.test(source) ? embeddedImageMarker(alt) : match;
+    },
+  );
+
+  sanitized = sanitized.replace(
+    shortcutReferenceImagePattern,
+    (match, alt: string) => {
+      const label = normalizeReference(alt);
+      const source = definitions.get(label);
+      if (!source) {
+        return match;
+      }
+      referencedLabels.add(label);
+      const warning = warningForSource(source);
+      if (warning) {
+        addWarning(warning);
+      }
+      return /^data:/iu.test(source) ? embeddedImageMarker(alt) : match;
+    },
+  );
+
+  sanitized = sanitized.replace(
+    referenceDefinitionPattern,
+    (match, label: string, angledSource?: string, bareSource?: string) => {
+      const source = (angledSource ?? bareSource ?? "").trim();
+      return referencedLabels.has(normalizeReference(label)) && /^data:/iu.test(source)
+        ? `[${label}]: # "Embedded image omitted"`
+        : match;
+    },
+  );
+
+  sanitized = sanitized.replace(
+    rawImagePattern,
+    (
+      match,
+      doubleQuotedSource?: string,
+      singleQuotedSource?: string,
+      unquotedSource?: string,
+    ) => {
+      const source = (
+        doubleQuotedSource ??
+        singleQuotedSource ??
+        unquotedSource ??
+        ""
+      ).trim();
+      const warning = warningForSource(source);
+      if (warning) {
+        addWarning(warning);
+      }
+      if (!/^data:/iu.test(source)) {
+        return match;
+      }
+      const altMatch = match.match(
+        /\balt=(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+))/iu,
+      );
+      return embeddedImageMarker(
+        altMatch?.[1] ?? altMatch?.[2] ?? altMatch?.[3] ?? "",
+      );
+    },
+  );
+
+  return { markdown: sanitized, warnings };
+}
+
+export function buildMemoryContent(body: string): string {
+  return `${body.trim()}\n`;
 }

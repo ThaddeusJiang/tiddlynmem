@@ -2,12 +2,15 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
-  buildMemoryMarkdown,
+  buildMemoryContent,
   classifyTiddler,
   findMediaReferences,
   htmlToMarkdown,
   isSensitiveTitle,
+  NOWLEDGE_MEM_TAG,
   parseTagString,
+  resolveWikiId,
+  sanitizeMarkdownMedia,
   shouldImportTiddler,
   stableMemoryId,
   toIsoTimestamp,
@@ -20,10 +23,18 @@ test("parseTagString keeps bracketed tags together", () => {
   );
 });
 
-test("shouldImportTiddler excludes system, draft, empty, and sensitive tiddlers", () => {
+test("shouldImportTiddler excludes system, draft, empty, imported, and sensitive tiddlers", () => {
   assert.equal(shouldImportTiddler({ title: "$:/Config", text: "x" }), false);
   assert.equal(shouldImportTiddler({ title: "Draft", text: "x", draftOf: "Old" }), false);
   assert.equal(shouldImportTiddler({ title: "Empty", text: "  " }), false);
+  assert.equal(
+    shouldImportTiddler({
+      tags: ["existing", NOWLEDGE_MEM_TAG],
+      text: "x",
+      title: "Imported",
+    }),
+    false,
+  );
   assert.equal(shouldImportTiddler({ title: "GitHub token", text: "x" }), false);
   assert.equal(
     shouldImportTiddler(
@@ -39,6 +50,14 @@ test("classifyTiddler returns a stable skip reason", () => {
   assert.equal(classifyTiddler({ title: "Draft", text: "x", draftTitle: "New" }), "draft");
   assert.equal(classifyTiddler({ title: "Empty", text: "" }), "empty");
   assert.equal(
+    classifyTiddler({
+      tags: `existing ${NOWLEDGE_MEM_TAG}`,
+      text: "x",
+      title: "Imported",
+    }),
+    "imported",
+  );
+  assert.equal(
     classifyTiddler({ title: "Image", text: "x", type: "image/png" }),
     "unsupported_type",
   );
@@ -52,10 +71,21 @@ test("isSensitiveTitle detects supported sensitive terms", () => {
   assert.equal(isSensitiveTitle("Markdown tips"), false);
 });
 
-test("stableMemoryId is stable and separates source wikis", () => {
-  const first = stableMemoryId("myblog", "Same title");
-  const second = stableMemoryId("myblog", "Same title");
-  const other = stableMemoryId("life-blog", "Same title");
+test("resolveWikiId separates same-named Wiki directories", () => {
+  const first = resolveWikiId("/notes/one/wiki");
+  const same = resolveWikiId("/notes/one/wiki");
+  const other = resolveWikiId("/notes/two/wiki");
+
+  assert.match(first, /^wiki-[0-9a-f]{12}$/u);
+  assert.equal(first, same);
+  assert.notEqual(first, other);
+  assert.equal(resolveWikiId("/notes/one/wiki", "personal-notes"), "personal-notes");
+});
+
+test("stableMemoryId is stable and separates Wiki identities", () => {
+  const first = stableMemoryId("myblog-a1b2c3", "Same title");
+  const second = stableMemoryId("myblog-a1b2c3", "Same title");
+  const other = stableMemoryId("myblog-d4e5f6", "Same title");
 
   assert.match(first, /^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
   assert.equal(first, second);
@@ -94,22 +124,66 @@ test("findMediaReferences reports embedded and local images", () => {
   );
 });
 
-test("buildMemoryMarkdown adds source metadata", () => {
-  const markdown = buildMemoryMarkdown(
-    {
-      title: "Example",
-      tags: ["Tech", "long tag"],
-      created: "20250810125715658",
-      modified: "20250812071535863",
-      text: "Body",
-    },
-    "myblog",
-    "Body",
+test("sanitizeMarkdownMedia omits embedded images and reports local images", () => {
+  const result = sanitizeMarkdownMedia(
+    [
+      "![Local](<local image.png>)",
+      "![Embedded](data:image/png;base64,abc)",
+      "![Remote](https://example.com/image.png)",
+    ].join("\n"),
   );
 
-  assert.match(markdown, /tiddlywiki_source: "myblog"/);
-  assert.match(markdown, /tiddlywiki_title: "Example"/);
-  assert.match(markdown, /tiddlywiki_tags: \["Tech","long tag"\]/);
-  assert.match(markdown, /tiddlywiki_created: "2025-08-10T12:57:15.658Z"/);
-  assert.match(markdown, /\n---\n\nBody\n$/);
+  assert.equal(
+    result.markdown,
+    [
+      "![Local](<local image.png>)",
+      "[Embedded image: Embedded]",
+      "![Remote](https://example.com/image.png)",
+    ].join("\n"),
+  );
+  assert.deepEqual(result.warnings, [
+    "local:local image.png",
+    "embedded:image/png",
+  ]);
+  assert.doesNotMatch(result.markdown, /base64/u);
+});
+
+test("sanitizeMarkdownMedia handles reference and raw HTML images", () => {
+  const result = sanitizeMarkdownMedia(
+    [
+      "![Referenced][asset]",
+      "[asset]: data:image/svg+xml;base64,abc",
+      '<img alt="Raw" src="data:image/gif;base64,abc">',
+    ].join("\n"),
+  );
+
+  assert.match(result.markdown, /\[Embedded image: Referenced\]/u);
+  assert.match(result.markdown, /\[Embedded image: Raw\]/u);
+  assert.doesNotMatch(result.markdown, /base64/u);
+  assert.deepEqual(result.warnings, [
+    "embedded:image/svg+xml",
+    "embedded:image/gif",
+  ]);
+});
+
+test("sanitizeMarkdownMedia handles shortcut references and unquoted HTML sources", () => {
+  const result = sanitizeMarkdownMedia(
+    [
+      "![Shortcut]",
+      "[Shortcut]: data:image/png;base64,abc",
+      "<img src=data:image/gif;base64,abc alt=Raw>",
+    ].join("\n"),
+  );
+
+  assert.match(result.markdown, /\[Embedded image: Shortcut\]/u);
+  assert.match(result.markdown, /\[Embedded image: Raw\]/u);
+  assert.doesNotMatch(result.markdown, /base64/u);
+  assert.deepEqual(result.warnings, [
+    "embedded:image/png",
+    "embedded:image/gif",
+  ]);
+});
+
+test("buildMemoryContent keeps the Markdown body free of metadata front matter", () => {
+  assert.equal(buildMemoryContent("\nBody\n"), "Body\n");
 });
