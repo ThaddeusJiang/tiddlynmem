@@ -1,6 +1,6 @@
 #!/usr/bin/env nub
 
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, resolve } from "node:path";
 import { spawn } from "node:child_process";
@@ -65,10 +65,14 @@ await run("node", ["dist/cli.js", "--help"], { cwd: projectRoot });
 
 const temporaryRoot = await mkdtemp(resolve(tmpdir(), "tiddlynmem-package-"));
 try {
+  const npmEnvironment = {
+    ...process.env,
+    npm_config_dry_run: "false",
+  };
   const packResult = await run(
     "npm",
     ["pack", "--json", "--ignore-scripts", "--pack-destination", temporaryRoot],
-    { cwd: projectRoot },
+    { cwd: projectRoot, env: npmEnvironment },
   );
   const packEntries = JSON.parse(packResult.stdout) as Array<{
     filename?: string;
@@ -79,6 +83,7 @@ try {
   }
 
   const installRoot = resolve(temporaryRoot, "install");
+  await mkdir(installRoot);
   await run(
     "npm",
     [
@@ -91,7 +96,7 @@ try {
       installRoot,
       resolve(temporaryRoot, filename),
     ],
-    { cwd: temporaryRoot },
+    { cwd: temporaryRoot, env: npmEnvironment },
   );
 
   const installedCli = resolve(
