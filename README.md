@@ -2,7 +2,13 @@
 
 Import TiddlyWiki tiddlers into [Nowledge Mem](https://mem.nowledge.co/) as Markdown memories.
 
-## Quick start
+## Copy to AI
+
+```text
+Read https://github.com/ThaddeusJiang/tiddlynmem/blob/main/README.md and import the TiddlyWiki in the current directory into Nowledge Mem.
+```
+
+## Run it yourself
 
 Run from the TiddlyWiki root directory:
 
