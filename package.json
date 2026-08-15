@@ -1,7 +1,7 @@
 {
   "name": "tiddlynmem",
   "version": "0.1.0",
-  "description": "Import TiddlyWiki tiddlers into Nowledge Mem as Markdown memories.",
+  "description": "Import TiddlyWiki tiddlers into Nowledge Mem as AI memories.",
   "author": {
     "name": "Thaddeus Jiang",
     "email": "thaddeusjiang@gmail.com",

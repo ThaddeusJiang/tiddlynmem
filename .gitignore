@@ -1,4 +1,5 @@
 dist/
+.tiddlynmem/
 *.tgz
 .DS_Store
 coverage/

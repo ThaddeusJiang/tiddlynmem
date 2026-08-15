@@ -25,10 +25,10 @@ test("parseArgs accepts explicit plan and apply commands", () => {
   assert.equal(parseArgs(["apply"]).command, "apply");
 });
 
-test("parseArgs accepts explicit import controls", () => {
+test("parseArgs accepts plan controls", () => {
   assert.deepEqual(
     parseArgs([
-      "apply",
+      "plan",
       "--include-sensitive",
       "--api-url",
       "http://127.0.0.1:14242",
@@ -45,7 +45,7 @@ test("parseArgs accepts explicit import controls", () => {
     ]),
     {
       apiUrl: "http://127.0.0.1:14242",
-      command: "apply",
+      command: "plan",
       includeSensitive: true,
       jobs: 2,
       limit: 10,
@@ -79,4 +79,18 @@ test("parseArgs rejects invalid numbers and unknown options", () => {
   );
   assert.throws(() => parseArgs(["--unknown"]), /Unknown option/u);
   assert.throws(() => parseArgs(["--wiki", "/notes/one"]), /Unknown option/u);
+});
+
+test("parseArgs reserves planning options for plan", () => {
+  for (const args of [
+    ["apply", "--api-url", "http://127.0.0.1:14242"],
+    ["apply", "--include-sensitive"],
+    ["apply", "--jobs", "2"],
+    ["apply", "--limit", "10"],
+    ["apply", "--space-id", "personal"],
+    ["apply", "--tag", "Project Alpha"],
+    ["apply", "--wiki-id", "personal-notes"],
+  ]) {
+    assert.throws(() => parseArgs(args), /does not accept plan options/u);
+  }
 });

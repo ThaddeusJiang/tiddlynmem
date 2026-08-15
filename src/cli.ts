@@ -26,6 +26,15 @@ import {
 } from "./nmem.ts";
 import { parseArgs } from "./options.ts";
 import {
+  assertSavedPlanMatches,
+  discardSavedPlan,
+  loadSavedPlan,
+  optionsFromSavedPlan,
+  savePlan,
+  SAVED_PLAN_RELATIVE_PATH,
+  type SavedPlan,
+} from "./plan.ts";
+import {
   NOWLEDGE_MEM_TAG,
   loadWiki,
   tagWikiTiddlers,
@@ -62,17 +71,18 @@ interface ImportSummary {
 
 const TERMINAL_CONTROL_PATTERN = /[\u0000-\u001f\u007f-\u009f]/gu;
 
-const help = `Usage: tiddlynmem [plan|apply] [options]
+const help = `Usage: tiddlynmem plan [options]
+       tiddlynmem apply
 
 Run this command from a TiddlyWiki root directory. It converts that Wiki's
 tiddlers to Markdown and imports them into Nowledge Mem. The default command
 is plan. Tiddlers tagged $:/NowledgeMem are skipped.
 
 Commands:
-  plan                    Preview changes without writing. Default.
-  apply                   Write memories, then tag successful source tiddlers.
+  plan                    Preview and save an execution plan. Default.
+  apply                   Apply the saved plan with no additional options.
 
-Options:
+Plan options:
   --limit <count>         Stop after this many ready tiddlers.
   --jobs <count>          Set concurrent Memory API writes. Default: 4.
   --space-id <id>         Set the Nowledge Mem space. Default: default.
@@ -208,14 +218,23 @@ async function main(): Promise<void> {
     return;
   }
 
-  const options = parseArgs(rawArgs);
+  let options = parseArgs(rawArgs);
   const applying = options.command === "apply";
   const wikiPaths = [resolve(process.cwd())];
 
   for (const wikiPath of wikiPaths) {
     await assertWikiPath(wikiPath);
   }
+  let savedPlan: SavedPlan | undefined;
+  if (applying) {
+    savedPlan = await loadSavedPlan(wikiPaths[0]!, packageVersion);
+    options = optionsFromSavedPlan(savedPlan);
+  } else {
+    await discardSavedPlan(wikiPaths[0]!);
+    options.apiUrl = resolveNmemApiUrl(options.apiUrl);
+  }
   const wikiId = resolveWikiId(wikiPaths[0]!, options.wikiId);
+  options.wikiId = wikiId;
 
   const entries: ResultEntry[] = [];
   const summary = newSummary();
@@ -340,6 +359,22 @@ async function main(): Promise<void> {
     }
   }
 
+  if (applying) {
+    if (summary.failed > 0) {
+      throw new Error(
+        'The TiddlyWiki changed after planning. Run "tiddlynmem plan" again before applying.',
+      );
+    }
+    assertSavedPlanMatches(savedPlan!, memories);
+  } else if (summary.failed === 0) {
+    await savePlan({
+      memories,
+      options,
+      packageVersion,
+      wikiPath: wikiPaths[0]!,
+    });
+  }
+
   let nmemApiUrl = "";
   if (applying && memories.length > 0) {
     try {
@@ -434,12 +469,23 @@ async function main(): Promise<void> {
       `Tagged: ${summary.tagged}`,
       `Failed: ${summary.failed}`,
       `Warnings: ${summary.warnings}`,
+      ...(!applying && summary.failed === 0
+        ? [`Saved plan: ${SAVED_PLAN_RELATIVE_PATH}`]
+        : []),
       "",
     ].join("\n"),
   );
 
   if (summary.failed > 0) {
     process.exitCode = 1;
+  } else if (applying) {
+    try {
+      await discardSavedPlan(wikiPaths[0]!);
+    } catch (error) {
+      process.stderr.write(
+        `Warning: unable to remove the saved plan: ${sanitizeTerminalText(error instanceof Error ? error.message : String(error))}\n`,
+      );
+    }
   }
 }
 

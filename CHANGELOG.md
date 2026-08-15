@@ -12,12 +12,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Added the `tiddlynmem` npm CLI for importing a Node.js TiddlyWiki into Nowledge Mem.
-- Added Terraform-style `plan` and `apply` commands, with non-mutating planning as the default.
+- Added Terraform-style saved-plan execution: `plan` owns all options, while bare `apply` verifies and executes the reviewed plan.
 - Added exact TiddlyWiki tag filtering through `--tag`, bounded imports through `--limit`, and concurrent writes through `--jobs`.
 - Added WikiText-to-GitHub-Flavored-Markdown conversion using the active TiddlyWiki runtime.
 - Added native Nowledge Mem titles, bodies, labels, source fields, stable IDs, and TiddlyWiki metadata.
 - Added post-import `$:/NowledgeMem` tagging so successfully imported tiddlers are skipped on later runs.
 - Added direct REST health checks, a zero-config local API default, HTTP and HTTPS URL overrides, sensitive-title filtering, and retries without requiring the `nmem` CLI.
+- Added body-free plan fingerprints so apply rejects Wiki changes made after planning.
 
 ### Fixed
 

@@ -5,6 +5,7 @@ import {
   access,
   cp,
   mkdtemp,
+  readFile,
   rm,
   writeFile,
 } from "node:fs/promises";
@@ -137,7 +138,12 @@ test("apply tags a tiddler after its Memory import succeeds", async (t) => {
   assert.match(tagResult.stdout, /\[ready\] Multiline/u);
   assert.match(tagResult.stdout, /Source: wiki/u);
   assert.match(tagResult.stdout, /Tags: Test, long tag/u);
-  await assert.rejects(access(resolve(wikiPath, ".tiddlynmem")));
+  assert.match(tagResult.stdout, /Saved plan: \.tiddlynmem\/plan\.json/u);
+  const savedPlanSource = await readFile(
+    resolve(wikiPath, ".tiddlynmem", "plan.json"),
+    "utf8",
+  );
+  assert.doesNotMatch(savedPlanSource, /First line|NMEM_API_KEY/u);
   assert.equal(memoryRequests.length, 0);
   assert.equal(healthRequests, 0);
 
@@ -155,15 +161,30 @@ test("apply tags a tiddler after its Memory import succeeds", async (t) => {
   assert.equal(memoryRequests.length, 0);
   assert.equal(healthRequests, 0);
 
-  healthResponseStatus = 503;
-  const preflightResult = await run(
+  const applyPlanResult = await run(
     "nub",
     [
       cliPath,
-      "apply",
+      "plan",
+      "--api-url",
+      apiUrl,
       "--wiki-id",
       "fixture-wiki",
     ],
+    {
+      cwd: wikiPath,
+      env: {
+        ...process.env,
+        NMEM_API_URL: "http://127.0.0.1:1",
+      },
+    },
+  );
+  assert.equal(applyPlanResult.code, 0, applyPlanResult.stderr);
+
+  healthResponseStatus = 503;
+  const preflightResult = await run(
+    "nub",
+    [cliPath, "apply"],
     {
       cwd: wikiPath,
       env: {
@@ -183,12 +204,7 @@ test("apply tags a tiddler after its Memory import succeeds", async (t) => {
   memoryResponseIncludesId = false;
   const malformedResult = await run(
     "nub",
-    [
-      cliPath,
-      "apply",
-      "--wiki-id",
-      "fixture-wiki",
-    ],
+    [cliPath, "apply"],
     {
       cwd: wikiPath,
       env: {
@@ -219,12 +235,7 @@ test("apply tags a tiddler after its Memory import succeeds", async (t) => {
   memoryResponseStatus = 422;
   const failedResult = await run(
     "nub",
-    [
-      cliPath,
-      "apply",
-      "--wiki-id",
-      "fixture-wiki",
-    ],
+    [cliPath, "apply"],
     {
       cwd: wikiPath,
       env: {
@@ -253,14 +264,7 @@ test("apply tags a tiddler after its Memory import succeeds", async (t) => {
   memoryResponseStatus = 200;
   const result = await run(
     "nub",
-    [
-      cliPath,
-      "apply",
-      "--api-url",
-      apiUrl,
-      "--wiki-id",
-      "fixture-wiki",
-    ],
+    [cliPath, "apply"],
     {
       cwd: wikiPath,
       env: {
@@ -306,15 +310,30 @@ test("apply tags a tiddler after its Memory import succeeds", async (t) => {
   const record = records.find((item) => item.title === "Multiline");
   assert.ok(record);
   assert.deepEqual(record.tags, ["Test", "long tag", NOWLEDGE_MEM_TAG]);
+  await assert.rejects(
+    access(resolve(wikiPath, ".tiddlynmem", "plan.json")),
+  );
 
-  const secondResult = await run(
+  const secondPlanResult = await run(
     "nub",
     [
       cliPath,
-      "apply",
+      "plan",
+      "--api-url",
+      apiUrl,
       "--wiki-id",
       "fixture-wiki",
     ],
+    {
+      cwd: wikiPath,
+      env: process.env,
+    },
+  );
+  assert.equal(secondPlanResult.code, 0, secondPlanResult.stderr);
+
+  const secondResult = await run(
+    "nub",
+    [cliPath, "apply"],
     {
       cwd: wikiPath,
       env: {
@@ -360,6 +379,12 @@ test("plan reports sanitized media and native API limits without bodies", async 
   const fixture = fileURLToPath(new URL("./fixtures/wiki", import.meta.url));
   const cliPath = fileURLToPath(new URL("../src/cli.ts", import.meta.url));
   await cp(fixture, wikiPath, { recursive: true });
+  const initialPlan = await run("nub", [cliPath, "plan"], {
+    cwd: wikiPath,
+    env: process.env,
+  });
+  assert.equal(initialPlan.code, 0, initialPlan.stderr);
+  await access(resolve(wikiPath, ".tiddlynmem", "plan.json"));
   await writeFile(
     resolve(wikiPath, "tiddlers", "Markdown.tid"),
     [
@@ -411,6 +436,9 @@ test("plan reports sanitized media and native API limits without bodies", async 
   assert.doesNotMatch(result.stdout, /Embedded image: Embedded/u);
   assert.doesNotMatch(result.stdout, /base64/u);
   await assert.rejects(access(resolve(temporaryRoot, "previews")));
+  await assert.rejects(
+    access(resolve(wikiPath, ".tiddlynmem", "plan.json")),
+  );
 });
 
 test("plan escapes terminal control characters", async (t) => {
@@ -449,4 +477,53 @@ test("plan escapes terminal control characters", async (t) => {
   assert.match(result.stdout, /Tags: Control\\u0007Tag/u);
   assert.match(result.stdout, /Source: wiki\\n\\u001b\[31m/u);
   assert.match(result.stdout, /Skipped: 0/u);
+});
+
+test("apply requires a saved plan", async (t) => {
+  const temporaryRoot = await mkdtemp(resolve(tmpdir(), "tiddlynmem-cli-test-"));
+  const wikiPath = resolve(temporaryRoot, "wiki");
+  const fixture = fileURLToPath(new URL("./fixtures/wiki", import.meta.url));
+  const cliPath = fileURLToPath(new URL("../src/cli.ts", import.meta.url));
+  await cp(fixture, wikiPath, { recursive: true });
+  t.after(async () => {
+    await rm(temporaryRoot, { force: true, recursive: true });
+  });
+
+  const result = await run("nub", [cliPath, "apply"], {
+    cwd: wikiPath,
+    env: process.env,
+  });
+
+  assert.equal(result.code, 1);
+  assert.match(result.stderr, /No saved plan found/u);
+});
+
+test("apply rejects TiddlyWiki drift after planning", async (t) => {
+  const temporaryRoot = await mkdtemp(resolve(tmpdir(), "tiddlynmem-cli-test-"));
+  const wikiPath = resolve(temporaryRoot, "wiki");
+  const fixture = fileURLToPath(new URL("./fixtures/wiki", import.meta.url));
+  const cliPath = fileURLToPath(new URL("../src/cli.ts", import.meta.url));
+  const tiddlerPath = resolve(wikiPath, "tiddlers", "Multiline.tid");
+  await cp(fixture, wikiPath, { recursive: true });
+  t.after(async () => {
+    await rm(temporaryRoot, { force: true, recursive: true });
+  });
+
+  const planResult = await run(
+    "nub",
+    [cliPath, "plan", "--tag", "long tag"],
+    { cwd: wikiPath, env: process.env },
+  );
+  assert.equal(planResult.code, 0, planResult.stderr);
+
+  const source = await readFile(tiddlerPath, "utf8");
+  await writeFile(tiddlerPath, source.replace("First line.", "Changed line."));
+
+  const applyResult = await run("nub", [cliPath, "apply"], {
+    cwd: wikiPath,
+    env: process.env,
+  });
+
+  assert.equal(applyResult.code, 1);
+  assert.match(applyResult.stderr, /changed after planning/u);
 });

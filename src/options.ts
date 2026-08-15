@@ -31,6 +31,7 @@ export function parseArgs(args: string[]): ImportOptions {
     wikiId: "",
   };
   let commandSpecified = false;
+  let planOptionSpecified = false;
 
   const takeValue = (index: number, option: string): string => {
     const value = args[index + 1];
@@ -54,29 +55,35 @@ export function parseArgs(args: string[]): ImportOptions {
         commandSpecified = true;
         break;
       case "--api-url":
+        planOptionSpecified = true;
         options.apiUrl = takeValue(index, option);
         index += 1;
         break;
       case "--include-sensitive":
+        planOptionSpecified = true;
         options.includeSensitive = true;
         break;
       case "--jobs": {
+        planOptionSpecified = true;
         const value = takeValue(index, option);
         options.jobs = positiveInteger(value, option);
         index += 1;
         break;
       }
       case "--limit": {
+        planOptionSpecified = true;
         const value = takeValue(index, option);
         options.limit = positiveInteger(value, option);
         index += 1;
         break;
       }
       case "--space-id":
+        planOptionSpecified = true;
         options.spaceId = takeValue(index, option);
         index += 1;
         break;
       case "--tag":
+        planOptionSpecified = true;
         if (options.tag) {
           throw new Error("--tag may only be specified once.");
         }
@@ -84,6 +91,7 @@ export function parseArgs(args: string[]): ImportOptions {
         index += 1;
         break;
       case "--wiki-id": {
+        planOptionSpecified = true;
         const value = takeValue(index, option).trim();
         if (!value) {
           throw new Error("--wiki-id requires a non-empty value.");
@@ -95,6 +103,12 @@ export function parseArgs(args: string[]): ImportOptions {
       default:
         throw new Error(`Unknown option: ${option}`);
     }
+  }
+
+  if (options.command === "apply" && planOptionSpecified) {
+    throw new Error(
+      'apply does not accept plan options. Run "tiddlynmem plan [options]" first, then run "tiddlynmem apply".',
+    );
   }
 
   return options;

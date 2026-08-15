@@ -13,13 +13,13 @@ This file is the development and contribution contract for AI coding agents work
 - The current working directory is the only Wiki input.
 - The command must be run from a directory containing a readable `tiddlywiki.info`.
 - Do not restore `--wiki`, hardcoded Wiki names, parent-directory scans, or sibling-directory scans.
-- The CLI uses Terraform-style `plan` and `apply` commands. Omitting the command defaults to `plan`.
-- Only the `apply` command may write to Nowledge Mem or modify source tiddlers. After a specific Memory write succeeds, append `$:/NowledgeMem` to that source tiddler without changing its text or duplicating the tag.
+- The CLI uses Terraform-style saved-plan semantics. Omitting the command defaults to `plan`; `plan` accepts all selection and execution options, while `apply` accepts no plan options and executes `.tiddlynmem/plan.json`.
+- Only the `apply` command may write to Nowledge Mem or modify source tiddlers. `plan` may only replace its local, body-free saved-plan artifact. After a specific Memory write succeeds, append `$:/NowledgeMem` to that source tiddler without changing its text or duplicating the tag.
 - Treat `$:/NowledgeMem` as an imported marker and classify matching source tiddlers as `skipped:imported` before conversion or Memory API writes.
 - When `--tag <tag>` is present, filter exact matching tiddlers inside the TiddlyWiki worker before WikiText rendering. Only matching records enter scanning, terminal output, classification, conversion, or import. Normal safety classification still applies after this input filter.
 - Never tag plan-only, skipped, conversion-failed, render-failed, or Memory-API-failed tiddlers. Never move or delete source tiddlers.
 - Do not require the `nmem` CLI at runtime. Both `plan` and `apply` must work without it.
-- Resolve the REST API URL in this order: `--api-url`, `NMEM_API_URL`, then `http://127.0.0.1:14242`.
+- During `plan`, resolve the REST API URL in this order: `--api-url`, `NMEM_API_URL`, then `http://127.0.0.1:14242`, and store the resolved non-credential URL in the saved plan.
 - Check the selected service's `/health` endpoint directly before writing.
 - Accept any explicitly selected HTTP or HTTPS endpoint without an additional confirmation flag.
 - Read REST credentials only from `NMEM_API_KEY`, send them as Bearer authentication, never pass them to TiddlyWiki workers, and never log them.
@@ -48,6 +48,7 @@ This file is the development and contribution contract for AI coding agents work
 - `src/tiddlywiki.ts`: owns read and tag worker lifecycles, IPC validation, and diagnostics.
 - `src/nmem.ts`: resolves and validates the selected service URL, checks REST health, and posts native Memory requests.
 - `src/options.ts`: parses supported command-line options.
+- `src/plan.ts`: atomically saves, validates, fingerprints, and consumes the local execution plan.
 - `scripts/build-package.ts`: compiles the npm package and changes only the generated CLI shebang from Nub to Node.
 - `test/`: Node test runner coverage and a minimal TiddlyWiki fixture.
 - `dist/`: generated npm package output; ignored, never edited, and never committed.
@@ -66,8 +67,10 @@ This file is the development and contribution contract for AI coding agents work
 - Never include raw Nowledge Mem API response bodies in errors or terminal output.
 - Treat a Memory write as successful only when the native response contains `memory.id` matching the requested deterministic ID. Malformed or mismatched success responses must not trigger source tagging.
 - Keep npm package metadata, CLI help, README commands, and tests synchronized with the package and executable names.
-- Keep `plan` as the default command and `apply` as the only mutating command. Do not restore the legacy `--apply` flag.
-- Keep `--report` and `--preview-dir` unsupported. `plan` is the only preview surface; the CLI must not create report or converted-Markdown files.
+- Keep `plan` as the default command and `apply` as the only command that mutates Nowledge Mem or source tiddlers. Do not restore the legacy `--apply` flag.
+- Present every user and agent workflow in Terraform order: run and review `plan [options]`, then run bare `apply`.
+- Keep all selection, identity, connection, and concurrency options exclusive to `plan`; reject them on `apply`.
+- Keep `--report` and `--preview-dir` unsupported. The CLI may create only `.tiddlynmem/plan.json`; it must not create report or converted-Markdown files.
 - Keep `--tag` as a single exact, case-sensitive input filter unless a deliberate CLI contract change updates tests and documentation.
 - Keep `--wiki-id` as the portable Wiki identity override and preserve its resolved value in native Memory metadata.
 - Keep `-V` and `--version` available outside a TiddlyWiki directory, with the value read from the installed `package.json`.
@@ -77,7 +80,9 @@ This file is the development and contribution contract for AI coding agents work
 
 Keep TiddlyWiki execution in the child worker. TiddlyWiki boot diagnostics must not be mixed with structured tiddler records; records travel through IPC and stderr is collected separately.
 
-During `apply`, scan and classify the Wiki before checking Nowledge Mem health. Skip the health check when no tiddlers are ready. If preflight fails, send no Memory requests, mark ready results as `failed:preflight`, print the error, and exit unsuccessfully.
+Before any `apply` network request, load the saved plan, rescan and classify the Wiki with its stored options, and verify the exact planned Memory IDs and content fingerprints. Reject missing, malformed, version-mismatched, wrong-directory, or drifted plans. Scan before checking Nowledge Mem health, skip the health check when no tiddlers are ready, and send no Memory requests when verification or preflight fails. Preserve a valid plan after transient apply failures so it can be retried; remove it after a completely successful apply.
+
+The saved plan is an internal execution artifact, not a report. Write it atomically with owner-only permissions. Store the resolved options, package version, Wiki path fingerprint, Memory IDs, and SHA-256 content fingerprints. Never store tiddler bodies, source tags, API keys, or raw API responses in it. Starting a new `plan` must discard any previous saved plan so a failed plan cannot leave an older plan eligible for apply.
 
 Source tagging is a post-import phase. Collect only titles whose Memory REST request succeeded, send titles over IPC instead of command-line arguments, and persist tags serially through TiddlyWiki's file serializer. On later scans, classify an existing `$:/NowledgeMem` tag as `imported` and skip it; the tag worker still treats an existing marker as success to remain race-safe. Only rewrite regular `application/x-tiddler` files or independently editable files with an existing `.meta` sidecar; fail safely for shared or unsupported formats. A tag failure must be visible in terminal output and produce an unsuccessful exit without misreporting the already completed Memory write.
 
@@ -118,6 +123,7 @@ For CLI behavior involving Wiki discovery or rendering, also run `plan` from `te
 Tests must cover behavior, not implementation details. Add or update tests when changing:
 
 - CLI options and defaults
+- saved-plan creation, validation, drift rejection, retry behavior, and successful consumption
 - exact tag input filtering with and without `--tag`
 - tag filtering before WikiText rendering
 - tiddler classification
