@@ -1,9 +1,6 @@
 dist/
-.tiddlynmem/
 *.tgz
 .DS_Store
 coverage/
 node_modules/
 npm-debug.log*
-previews/
-reports/

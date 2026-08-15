@@ -26,12 +26,10 @@ Filter by an exact TiddlyWiki tag:
 npx tiddlynmem apply --tag "Project Alpha"
 ```
 
-Preview a limited batch with converted Markdown files:
+Preview a limited batch:
 
 ```bash
-npx tiddlynmem plan \
-  --limit 20 \
-  --preview-dir /tmp/tiddlynmem-preview
+npx tiddlynmem plan --limit 20
 ```
 
 Use another Nowledge Mem endpoint:
@@ -54,7 +52,7 @@ npx tiddlynmem apply --wiki-id personal-notes
 
 | Command | Description |
 | --- | --- |
-| `plan` | Preview and report without writing; default when omitted |
+| `plan` | Preview tiddlers without writing; default when omitted |
 | `apply` | Import memories and tag successful source tiddlers |
 
 | Option | Description |
@@ -66,12 +64,8 @@ npx tiddlynmem apply --wiki-id personal-notes
 | `--wiki-id <id>` | Stable portable Wiki identity |
 | `--include-sensitive` | Include titles matched by the sensitive-title filter |
 | `--api-url <url>` | Nowledge Mem HTTP or HTTPS endpoint |
-| `--preview-dir <path>` | Write converted Markdown previews |
-| `--report <path>` | Choose the JSON report path |
 | `-h`, `--help` | Show help |
 | `-V`, `--version` | Show version |
-
-Reports default to `.tiddlynmem/reports/`. They include titles, tags, IDs, statuses, warnings, and errors, but never tiddler bodies.
 
 ## Import behavior
 

@@ -16,7 +16,7 @@ This file is the development and contribution contract for AI coding agents work
 - The CLI uses Terraform-style `plan` and `apply` commands. Omitting the command defaults to `plan`.
 - Only the `apply` command may write to Nowledge Mem or modify source tiddlers. After a specific Memory write succeeds, append `$:/NowledgeMem` to that source tiddler without changing its text or duplicating the tag.
 - Treat `$:/NowledgeMem` as an imported marker and classify matching source tiddlers as `skipped:imported` before conversion or Memory API writes.
-- When `--tag <tag>` is present, filter exact matching tiddlers inside the TiddlyWiki worker before WikiText rendering. Only matching records enter scanning, reporting, classification, conversion, preview, or import. Normal safety classification still applies after this input filter.
+- When `--tag <tag>` is present, filter exact matching tiddlers inside the TiddlyWiki worker before WikiText rendering. Only matching records enter scanning, terminal output, classification, conversion, or import. Normal safety classification still applies after this input filter.
 - Never tag plan-only, skipped, conversion-failed, render-failed, or Memory-API-failed tiddlers. Never move or delete source tiddlers.
 - Do not require the `nmem` CLI at runtime. Both `plan` and `apply` must work without it.
 - Resolve the REST API URL in this order: `--api-url`, `NMEM_API_URL`, then `http://127.0.0.1:14242`.
@@ -41,7 +41,7 @@ This file is the development and contribution contract for AI coding agents work
 
 ## Repository map
 
-- `src/cli.ts`: CLI orchestration, current-directory validation, reporting, previews, and concurrent imports.
+- `src/cli.ts`: CLI orchestration, current-directory validation, terminal results, and concurrent imports.
 - `src/core.ts`: tiddler classification, metadata, stable IDs, HTML-to-Markdown conversion, and media warnings.
 - `src/tiddlywiki-worker.ts`: boots TiddlyWiki and sends records over IPC.
 - `src/tiddlywiki-tag-worker.ts`: boots TiddlyWiki after successful imports and persists the source marker tag.
@@ -51,7 +51,6 @@ This file is the development and contribution contract for AI coding agents work
 - `scripts/build-package.ts`: compiles the npm package and changes only the generated CLI shebang from Nub to Node.
 - `test/`: Node test runner coverage and a minimal TiddlyWiki fixture.
 - `dist/`: generated npm package output; ignored, never edited, and never committed.
-- `reports/`, `previews/`: generated output; both are ignored and must not be committed.
 
 ## npm CLI contract
 
@@ -62,14 +61,15 @@ This file is the development and contribution contract for AI coding agents work
 - `npm prepack` must also start the generated CLI under plain Node through `npm run check:package`.
 - Do not hand-edit or commit generated `.js` files, and do not add a handwritten `.js` or `.mjs` launcher.
 - The published package must not depend on Nub at runtime; plain Node executes the generated CLI.
-- The default report belongs to the current Wiki and is written under `.tiddlynmem/reports/`.
-- Every report entry must include the complete source tiddler tag list for ready, skipped, and failed states. Do not include tiddler bodies in reports.
-- Never include raw Nowledge Mem API response bodies in errors or reports.
+- Print every ready, skipped, and failed tiddler with its complete source tag list, plus skipped totals by reason. Do not print tiddler bodies.
+- Escape terminal control characters in all tiddler-derived fields, diagnostics, paths, warnings, and errors before printing them.
+- Never include raw Nowledge Mem API response bodies in errors or terminal output.
 - Treat a Memory write as successful only when the native response contains `memory.id` matching the requested deterministic ID. Malformed or mismatched success responses must not trigger source tagging.
 - Keep npm package metadata, CLI help, README commands, and tests synchronized with the package and executable names.
 - Keep `plan` as the default command and `apply` as the only mutating command. Do not restore the legacy `--apply` flag.
+- Keep `--report` and `--preview-dir` unsupported. `plan` is the only preview surface; the CLI must not create report or converted-Markdown files.
 - Keep `--tag` as a single exact, case-sensitive input filter unless a deliberate CLI contract change updates tests and documentation.
-- Keep `--wiki-id` as the portable Wiki identity override, and expose its resolved value in report options and native Memory metadata.
+- Keep `--wiki-id` as the portable Wiki identity override and preserve its resolved value in native Memory metadata.
 - Keep `-V` and `--version` available outside a TiddlyWiki directory, with the value read from the installed `package.json`.
 - Preserve the historical `tiddlywiki-nmem-importer` string used by `stableMemoryId`; it is an ID compatibility namespace, not the current product name. Changing it would duplicate previously imported Memories.
 
@@ -77,17 +77,17 @@ This file is the development and contribution contract for AI coding agents work
 
 Keep TiddlyWiki execution in the child worker. TiddlyWiki boot diagnostics must not be mixed with structured tiddler records; records travel through IPC and stderr is collected separately.
 
-During `apply`, scan and classify the Wiki before checking Nowledge Mem health. Skip the health check when no tiddlers are ready. If preflight fails, send no Memory requests, mark ready report entries as `failed:preflight`, write the report, and exit unsuccessfully.
+During `apply`, scan and classify the Wiki before checking Nowledge Mem health. Skip the health check when no tiddlers are ready. If preflight fails, send no Memory requests, mark ready results as `failed:preflight`, print the error, and exit unsuccessfully.
 
-Source tagging is a post-import phase. Collect only titles whose Memory REST request succeeded, send titles over IPC instead of command-line arguments, and persist tags serially through TiddlyWiki's file serializer. On later scans, classify an existing `$:/NowledgeMem` tag as `imported` and skip it; the tag worker still treats an existing marker as success to remain race-safe. Only rewrite regular `application/x-tiddler` files or independently editable files with an existing `.meta` sidecar; fail safely for shared or unsupported formats. A tag failure must be visible in the report and produce an unsuccessful exit without misreporting the already completed Memory write.
+Source tagging is a post-import phase. Collect only titles whose Memory REST request succeeded, send titles over IPC instead of command-line arguments, and persist tags serially through TiddlyWiki's file serializer. On later scans, classify an existing `$:/NowledgeMem` tag as `imported` and skip it; the tag worker still treats an existing marker as success to remain race-safe. Only rewrite regular `application/x-tiddler` files or independently editable files with an existing `.meta` sidecar; fail safely for shared or unsupported formats. A tag failure must be visible in terminal output and produce an unsuccessful exit without misreporting the already completed Memory write.
 
 Conversion behavior is type-dependent:
 
 - `text/vnd.tiddlywiki` and the empty/default type are rendered by TiddlyWiki before Turndown conversion.
 - `text/markdown` retains its source Markdown after media safety processing; `text/plain` uses its source text directly.
-- Unsupported binary types, system tiddlers, drafts, previously imported tiddlers, empty tiddlers, and sensitive-title tiddlers are classified and reported instead of imported.
+- Unsupported binary types, system tiddlers, drafts, previously imported tiddlers, empty tiddlers, and sensitive-title tiddlers are classified and listed instead of imported.
 
-Memory content is the converted Markdown body without importer front matter. Sanitize embedded data-URI images in inline Markdown images, full/collapsed/shortcut reference images, and raw HTML images with quoted or unquoted `src` attributes. Report preserved local image references as warnings. Map every source tag to a native Memory label, and preserve Wiki identity, source Wiki, original title, exact tags, created time, and modified time in the native Memory `metadata` object. Use `source: "tiddlywiki"` and `source_app: "tiddlynmem"`. Nowledge Mem owns its lifecycle `created_at` and `updated_at`; do not misuse event dates as source-file timestamps.
+Memory content is the converted Markdown body without importer front matter. Sanitize embedded data-URI images in inline Markdown images, full/collapsed/shortcut reference images, and raw HTML images with quoted or unquoted `src` attributes. Print preserved local image references as warnings. Map every source tag to a native Memory label, and preserve Wiki identity, source Wiki, original title, exact tags, created time, and modified time in the native Memory `metadata` object. Use `source: "tiddlywiki"` and `source_app: "tiddlynmem"`. Nowledge Mem owns its lifecycle `created_at` and `updated_at`; do not misuse event dates as source-file timestamps.
 
 Validate native Memory request limits during `plan`: title length is at most 200 Unicode characters and content length is at most 32,768 Unicode characters. Report a validation failure instead of truncating, splitting, or sending an invalid request. Retry only transient network failures, request timeouts, HTTP 408, HTTP 429, and HTTP 5xx responses. Bound workers and HTTP calls with timeouts.
 
@@ -128,7 +128,7 @@ Tests must cover behavior, not implementation details. Add or update tests when 
 - native title/content limits, transient retry classification, and request timeouts
 - Markdown data-URI omission and local-media warnings
 - worker IPC and multiline content
-- worker credential isolation and apply preflight reporting
+- worker credential isolation and apply preflight output
 - post-import source tagging, idempotence, and source-text preservation
 - npm package name, executable mapping, and packed CLI startup
 
@@ -137,7 +137,7 @@ Every GitHub Actions `uses:` reference must be pinned to a full commit SHA with 
 ## Contribution workflow
 
 1. Read `README.md`, this file, and the source files relevant to the requested behavior.
-2. Inspect the repository for all references before changing a public option, report field, ID algorithm, label, or conversion rule.
+2. Inspect the repository for all references before changing a public option, output field, ID algorithm, label, or conversion rule.
 3. Keep the patch scoped to the request and preserve unrelated user changes.
 4. Update tests and user documentation in the same change when behavior changes.
 5. Run typecheck and the full test suite.

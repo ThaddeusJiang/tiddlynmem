@@ -16,17 +16,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added exact TiddlyWiki tag filtering through `--tag`, bounded imports through `--limit`, and concurrent writes through `--jobs`.
 - Added WikiText-to-GitHub-Flavored-Markdown conversion using the active TiddlyWiki runtime.
 - Added native Nowledge Mem titles, bodies, labels, source fields, stable IDs, and TiddlyWiki metadata.
-- Added detailed JSON reports containing source tags, outcomes, warnings, errors, and source-tagging status without exposing tiddler bodies.
 - Added post-import `$:/NowledgeMem` tagging so successfully imported tiddlers are skipped on later runs.
 - Added direct REST health checks, a zero-config local API default, HTTP and HTTPS URL overrides, sensitive-title filtering, and retries without requiring the `nmem` CLI.
 
 ### Fixed
 
 - Prevented same-named Wiki directories from sharing Memory IDs and added `--wiki-id` for an explicit portable identity.
-- Prevented TiddlyWiki workers from receiving `NMEM_API_KEY` and omitted raw API response bodies from errors and reports.
+- Prevented TiddlyWiki workers from receiving `NMEM_API_KEY` and omitted raw API response bodies from errors and terminal output.
 - Required successful Memory API responses to confirm the requested stable ID before source tiddlers are tagged.
 - Rejected health-check and Memory API redirects so tiddler data is never forwarded to an unexpected address.
-- Wrote `failed:preflight` reports when service health checks fail and skipped health checks when an apply has no ready tiddlers.
+- Printed `failed:preflight` results when service health checks fail and skipped health checks when an apply has no ready tiddlers.
 - Filtered `--tag` selections before WikiText rendering so unrelated tiddlers are not processed.
 - Skipped WikiText rendering for drafts, previously imported tiddlers, and sensitive-title tiddlers excluded by default.
 - Removed embedded data-URI images from inline, reference, shortcut-reference, and raw HTML Markdown images, and reported preserved local Markdown images.
@@ -34,6 +33,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Limited retries to transient failures and added timeouts for health checks, TiddlyWiki workers, and Memory API requests.
 - Preserved non-Latin Wiki directory names in generated source labels.
 - Removed the unnecessary `--allow-remote` confirmation flag so explicitly configured endpoints work directly.
+- Escaped terminal control characters in tiddler-derived output and diagnostics.
+- Added skipped totals and reason counts to terminal summaries.
 
 [Unreleased]: https://github.com/ThaddeusJiang/tiddlynmem/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/ThaddeusJiang/tiddlynmem/releases/tag/v0.1.0

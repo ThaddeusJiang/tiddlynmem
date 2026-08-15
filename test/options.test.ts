@@ -10,8 +10,6 @@ test("parseArgs uses safe defaults", () => {
     includeSensitive: false,
     jobs: 4,
     limit: Number.POSITIVE_INFINITY,
-    previewDir: "",
-    reportPath: "",
     spaceId: "default",
     tag: "",
     wikiId: "",
@@ -44,10 +42,6 @@ test("parseArgs accepts explicit import controls", () => {
       "Project Alpha",
       "--wiki-id",
       "personal-notes",
-      "--preview-dir",
-      "/tmp/preview",
-      "--report",
-      "/tmp/report.json",
     ]),
     {
       apiUrl: "http://127.0.0.1:14242",
@@ -55,8 +49,6 @@ test("parseArgs accepts explicit import controls", () => {
       includeSensitive: true,
       jobs: 2,
       limit: 10,
-      previewDir: "/tmp/preview",
-      reportPath: "/tmp/report.json",
       spaceId: "personal",
       tag: "Project Alpha",
       wikiId: "personal-notes",
@@ -73,6 +65,14 @@ test("parseArgs rejects invalid numbers and unknown options", () => {
   assert.throws(() => parseArgs(["plan", "apply"]), /Only one command/u);
   assert.throws(() => parseArgs(["--apply"]), /Unknown option/u);
   assert.throws(() => parseArgs(["--allow-remote"]), /Unknown option/u);
+  assert.throws(
+    () => parseArgs(["--report", "report.json"]),
+    /Unknown option/u,
+  );
+  assert.throws(
+    () => parseArgs(["--preview-dir", "/tmp/preview"]),
+    /Unknown option/u,
+  );
   assert.throws(
     () => parseArgs(["--tag", "one", "--tag", "two"]),
     /only be specified once/u,

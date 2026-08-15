@@ -6,8 +6,6 @@ export interface ImportOptions {
   includeSensitive: boolean;
   jobs: number;
   limit: number;
-  previewDir: string;
-  reportPath: string;
   spaceId: string;
   tag: string;
   wikiId: string;
@@ -28,8 +26,6 @@ export function parseArgs(args: string[]): ImportOptions {
     includeSensitive: false,
     jobs: 4,
     limit: Number.POSITIVE_INFINITY,
-    previewDir: "",
-    reportPath: "",
     spaceId: "default",
     tag: "",
     wikiId: "",
@@ -76,14 +72,6 @@ export function parseArgs(args: string[]): ImportOptions {
         index += 1;
         break;
       }
-      case "--preview-dir":
-        options.previewDir = takeValue(index, option);
-        index += 1;
-        break;
-      case "--report":
-        options.reportPath = takeValue(index, option);
-        index += 1;
-        break;
       case "--space-id":
         options.spaceId = takeValue(index, option);
         index += 1;

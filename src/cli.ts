@@ -1,9 +1,9 @@
 #!/usr/bin/env nub
 
-import { access, mkdir, writeFile } from "node:fs/promises";
+import { access } from "node:fs/promises";
 import { constants } from "node:fs";
 import { createRequire } from "node:module";
-import { basename, dirname, resolve } from "node:path";
+import { basename, resolve } from "node:path";
 
 import {
   buildMemoryContent,
@@ -39,7 +39,7 @@ interface MemoryCandidate extends MemoryInput {
   warnings: string[];
 }
 
-interface ReportEntry {
+interface ResultEntry {
   error?: string;
   id?: string;
   sourceWiki: string;
@@ -60,23 +60,7 @@ interface ImportSummary {
   warnings: number;
 }
 
-interface ImportReport {
-  completedAt: string;
-  entries: ReportEntry[];
-  mode: "apply" | "plan";
-  options: {
-    includeSensitive: boolean;
-    jobs: number;
-    limit: number | null;
-    spaceId: string;
-    tag: string | null;
-    wikiId: string;
-  };
-  startedAt: string;
-  summary: ImportSummary;
-  wikis: string[];
-  workerDiagnostics: Array<{ message: string; sourceWiki: string }>;
-}
+const TERMINAL_CONTROL_PATTERN = /[\u0000-\u001f\u007f-\u009f]/gu;
 
 const help = `Usage: tiddlynmem [plan|apply] [options]
 
@@ -96,15 +80,9 @@ Options:
   --wiki-id <id>          Set a stable, portable identity for this Wiki.
   --include-sensitive     Include tiddlers with sensitive title terms.
   --api-url <url>         Override NMEM_API_URL and the local API default.
-  --preview-dir <path>    Write converted Markdown previews.
-  --report <path>         Write the JSON report to this path.
   -h, --help              Show this help.
   -V, --version           Show the installed tiddlynmem version.
 `;
-
-function timestampForPath() {
-  return new Date().toISOString().replaceAll(":", "-");
-}
 
 async function assertWikiPath(wikiPath: string): Promise<void> {
   const infoPath = resolve(wikiPath, "tiddlywiki.info");
@@ -137,13 +115,30 @@ function newSummary(): ImportSummary {
   };
 }
 
-async function writePreview(
-  previewDir: string,
-  memory: MemoryCandidate,
-): Promise<void> {
-  const directory = resolve(previewDir, memory.sourceWiki);
-  await mkdir(directory, { recursive: true });
-  await writeFile(resolve(directory, `${memory.id}.md`), memory.content, "utf8");
+function sanitizeTerminalText(value: string): string {
+  return value.replace(TERMINAL_CONTROL_PATTERN, (character) => {
+    switch (character) {
+      case "\n":
+        return "\\n";
+      case "\r":
+        return "\\r";
+      case "\t":
+        return "\\t";
+      default:
+        return `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`;
+    }
+  });
+}
+
+function formatSkippedSummary(skipped: Record<SkipReason, number>): string {
+  const reasons = Object.entries(skipped).filter(([, count]) => count > 0);
+  const total = reasons.reduce((sum, [, count]) => sum + count, 0);
+  if (reasons.length === 0) {
+    return "Skipped: 0";
+  }
+  return `Skipped: ${total} (${reasons
+    .map(([reason, count]) => `${reason}: ${count}`)
+    .join(", ")})`;
 }
 
 async function runPool<T>(
@@ -163,6 +158,43 @@ async function runPool<T>(
     },
   );
   await Promise.all(workers);
+}
+
+function formatResultEntries(entries: ResultEntry[]): string {
+  const lines = ["Tiddlers:"];
+  if (entries.length === 0) {
+    lines.push("  (none)");
+    return lines.join("\n");
+  }
+
+  for (const entry of entries) {
+    lines.push(
+      `- [${sanitizeTerminalText(entry.status)}] ${sanitizeTerminalText(entry.title)}`,
+    );
+    lines.push(`  Source: ${sanitizeTerminalText(entry.sourceWiki)}`);
+    lines.push(
+      `  Tags: ${
+        entry.tags.length > 0
+          ? entry.tags.map(sanitizeTerminalText).join(", ")
+          : "(none)"
+      }`,
+    );
+    if (entry.id) {
+      lines.push(`  ID: ${sanitizeTerminalText(entry.id)}`);
+    }
+    if (entry.sourceTag) {
+      lines.push(`  Source tag: ${sanitizeTerminalText(entry.sourceTag)}`);
+    }
+    if (entry.warnings && entry.warnings.length > 0) {
+      lines.push(
+        `  Warnings: ${entry.warnings.map(sanitizeTerminalText).join("; ")}`,
+      );
+    }
+    if (entry.error) {
+      lines.push(`  Error: ${sanitizeTerminalText(entry.error)}`);
+    }
+  }
+  return lines.join("\n");
 }
 
 async function main(): Promise<void> {
@@ -185,39 +217,26 @@ async function main(): Promise<void> {
   }
   const wikiId = resolveWikiId(wikiPaths[0]!, options.wikiId);
 
-  const report: ImportReport = {
-    completedAt: "",
-    entries: [],
-    mode: options.command,
-    options: {
-      includeSensitive: options.includeSensitive,
-      jobs: options.jobs,
-      limit: Number.isFinite(options.limit) ? options.limit : null,
-      spaceId: options.spaceId,
-      tag: options.tag || null,
-      wikiId,
-    },
-    startedAt: new Date().toISOString(),
-    summary: newSummary(),
-    wikis: wikiPaths,
-    workerDiagnostics: [],
-  };
+  const entries: ResultEntry[] = [];
+  const summary = newSummary();
   const memories: MemoryCandidate[] = [];
-  const entriesById = new Map<string, ReportEntry>();
+  const entriesById = new Map<string, ResultEntry>();
 
   for (const wikiPath of wikiPaths) {
     if (memories.length >= options.limit) {
       break;
     }
     const sourceWiki = basename(wikiPath);
-    process.stdout.write(`Loading ${sourceWiki}...\n`);
+    process.stdout.write(`Loading ${sanitizeTerminalText(sourceWiki)}...\n`);
     const { diagnostics, records } = await loadWiki(wikiPath, {
       includeSensitive: options.includeSensitive,
       tag: options.tag,
     });
-    report.workerDiagnostics.push(
-      ...diagnostics.map((message) => ({ message, sourceWiki })),
-    );
+    for (const message of diagnostics) {
+      process.stderr.write(
+        `TiddlyWiki [${sanitizeTerminalText(sourceWiki)}]: ${sanitizeTerminalText(message)}\n`,
+      );
+    }
 
     for (const tiddler of records) {
       if (memories.length >= options.limit) {
@@ -227,13 +246,13 @@ async function main(): Promise<void> {
       if (options.tag && !tags.includes(options.tag)) {
         continue;
       }
-      report.summary.scanned += 1;
+      summary.scanned += 1;
       const classification = classifyTiddler(tiddler, {
         includeSensitive: options.includeSensitive,
       });
       if (classification !== "ready") {
-        report.summary.skipped[classification] += 1;
-        report.entries.push({
+        summary.skipped[classification] += 1;
+        entries.push({
           sourceWiki,
           status: `skipped:${classification}`,
           tags,
@@ -242,8 +261,8 @@ async function main(): Promise<void> {
         continue;
       }
       if (tiddler.renderError) {
-        report.summary.failed += 1;
-        report.entries.push({
+        summary.failed += 1;
+        entries.push({
           error: tiddler.renderError,
           sourceWiki,
           status: "failed:render",
@@ -263,8 +282,8 @@ async function main(): Promise<void> {
           : sanitizeMarkdownMedia(sourceBody);
       const body = markdownMedia.markdown;
       if (!body) {
-        report.summary.failed += 1;
-        report.entries.push({
+        summary.failed += 1;
+        entries.push({
           error: "The converted Markdown is empty.",
           sourceWiki,
           status: "failed:conversion",
@@ -280,7 +299,7 @@ async function main(): Promise<void> {
           ...markdownMedia.warnings,
         ]),
       ];
-      report.summary.warnings += warnings.length;
+      summary.warnings += warnings.length;
       const memory = {
         content: buildMemoryContent(body),
         created: toIsoTimestamp(tiddler.created),
@@ -294,8 +313,8 @@ async function main(): Promise<void> {
       };
       const validationErrors = validateMemoryInput(memory);
       if (validationErrors.length > 0) {
-        report.summary.failed += 1;
-        report.entries.push({
+        summary.failed += 1;
+        entries.push({
           error: validationErrors.join(" "),
           id: memory.id,
           sourceWiki,
@@ -307,8 +326,8 @@ async function main(): Promise<void> {
         continue;
       }
       memories.push(memory);
-      report.summary.ready += 1;
-      const entry: ReportEntry = {
+      summary.ready += 1;
+      const entry: ResultEntry = {
         id: memory.id,
         sourceWiki,
         status: "ready",
@@ -316,11 +335,8 @@ async function main(): Promise<void> {
         title: memory.title,
         warnings,
       };
-      report.entries.push(entry);
+      entries.push(entry);
       entriesById.set(memory.id, entry);
-      if (options.previewDir) {
-        await writePreview(options.previewDir, memory);
-      }
     }
   }
 
@@ -337,11 +353,11 @@ async function main(): Promise<void> {
       for (const memory of memories) {
         const entry = entriesById.get(memory.id);
         if (!entry) {
-          throw new Error(`Missing report entry for memory ${memory.id}.`);
+          throw new Error(`Missing result entry for memory ${memory.id}.`);
         }
         entry.status = "failed:preflight";
         entry.error = message;
-        report.summary.failed += 1;
+        summary.failed += 1;
       }
     }
   }
@@ -352,7 +368,7 @@ async function main(): Promise<void> {
     await runPool(memories, options.jobs, async (memory) => {
       const entry = entriesById.get(memory.id);
       if (!entry) {
-        throw new Error(`Missing report entry for memory ${memory.id}.`);
+        throw new Error(`Missing result entry for memory ${memory.id}.`);
       }
       try {
         await addMemory(memory, {
@@ -360,12 +376,12 @@ async function main(): Promise<void> {
           spaceId: options.spaceId,
         });
         entry.status = "imported";
-        report.summary.imported += 1;
+        summary.imported += 1;
         importedTitles.push(memory.title);
       } catch (error) {
         entry.status = "failed:import";
         entry.error = error instanceof Error ? error.message : String(error);
-        report.summary.failed += 1;
+        summary.failed += 1;
       }
     });
 
@@ -381,15 +397,15 @@ async function main(): Promise<void> {
         for (const result of tagResults) {
           const entry = entriesByTitle.get(result.title);
           if (!entry) {
-            throw new Error(`Missing report entry for tiddler ${result.title}.`);
+            throw new Error(`Missing result entry for tiddler ${result.title}.`);
           }
           entry.sourceTag = result.status;
           if (result.status === "failed") {
             entry.status = "imported:tag-failed";
             entry.error = `Memory imported, but source tagging failed: ${result.error ?? "Unknown error"}`;
-            report.summary.failed += 1;
+            summary.failed += 1;
           } else {
-            report.summary.tagged += 1;
+            summary.tagged += 1;
           }
         }
       } catch (error) {
@@ -400,46 +416,36 @@ async function main(): Promise<void> {
             entry.sourceTag = "failed";
             entry.status = "imported:tag-failed";
             entry.error = `Memory imported, but source tagging failed: ${message}`;
-            report.summary.failed += 1;
+            summary.failed += 1;
           }
         }
       }
     }
   }
 
-  report.completedAt = new Date().toISOString();
-  const reportPath = resolve(
-    options.reportPath ||
-      resolve(
-        process.cwd(),
-        ".tiddlynmem",
-        "reports",
-        `${timestampForPath()}-${report.mode}.json`,
-      ),
-  );
-  await mkdir(dirname(reportPath), { recursive: true });
-  await writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`, "utf8");
-
   process.stdout.write(
     [
-      `Mode: ${report.mode}`,
-      `Scanned: ${report.summary.scanned}`,
-      `Ready: ${report.summary.ready}`,
-      `Imported: ${report.summary.imported}`,
-      `Tagged: ${report.summary.tagged}`,
-      `Failed: ${report.summary.failed}`,
-      `Warnings: ${report.summary.warnings}`,
-      `Report: ${reportPath}`,
+      `Mode: ${options.command}`,
+      formatResultEntries(entries),
+      `Scanned: ${summary.scanned}`,
+      `Ready: ${summary.ready}`,
+      formatSkippedSummary(summary.skipped),
+      `Imported: ${summary.imported}`,
+      `Tagged: ${summary.tagged}`,
+      `Failed: ${summary.failed}`,
+      `Warnings: ${summary.warnings}`,
       "",
     ].join("\n"),
   );
 
-  if (report.summary.failed > 0) {
+  if (summary.failed > 0) {
     process.exitCode = 1;
   }
 }
 
 main().catch((error) => {
-  process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+  process.stderr.write(
+    `${sanitizeTerminalText(error instanceof Error ? error.message : String(error))}\n`,
+  );
   process.exitCode = 1;
 });
