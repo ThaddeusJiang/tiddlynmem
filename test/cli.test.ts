@@ -62,6 +62,10 @@ test("help omits removed compatibility and file-output options", async () => {
   assert.doesNotMatch(result.stdout, /allow-remote/u);
   assert.doesNotMatch(result.stdout, /--report/u);
   assert.doesNotMatch(result.stdout, /--preview-dir/u);
+  assert.match(
+    result.stdout,
+    /Plan options:[\s\S]*--api-url <url>[^\n]*\n\nGlobal options:\n  -h, --help[^\n]*\n  -V, --version/u,
+  );
 });
 
 test("apply tags a tiddler after its Memory import succeeds", async (t) => {

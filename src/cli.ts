@@ -90,6 +90,8 @@ Plan options:
   --wiki-id <id>          Set a stable, portable identity for this Wiki.
   --include-sensitive     Include tiddlers with sensitive title terms.
   --api-url <url>         Override NMEM_API_URL and the local API default.
+
+Global options:
   -h, --help              Show this help.
   -V, --version           Show the installed tiddlynmem version.
 `;

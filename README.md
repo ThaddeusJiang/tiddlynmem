@@ -1,66 +1,52 @@
 # tiddlynmem
 
 [![npm version](https://img.shields.io/npm/v/tiddlynmem.svg)](https://www.npmjs.com/package/tiddlynmem)
-[![npm downloads](https://img.shields.io/npm/dw/tiddlynmem.svg)](https://www.npmjs.com/package/tiddlynmem)
 [![CI](https://github.com/ThaddeusJiang/tiddlynmem/actions/workflows/ci.yml/badge.svg)](https://github.com/ThaddeusJiang/tiddlynmem/actions/workflows/ci.yml)
 [![Node.js](https://img.shields.io/node/v/tiddlynmem.svg)](https://www.npmjs.com/package/tiddlynmem)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
 Import TiddlyWiki tiddlers into [Nowledge Mem](https://mem.nowledge.co/) as AI memories.
 
-## Copy to AI
+## Agent Usage
 
 ```text
-Read the project instructions:
-https://github.com/ThaddeusJiang/tiddlynmem/blob/main/README.md
-
-Then plan and apply the TiddlyWiki import in the current directory.
+Read https://github.com/ThaddeusJiang/tiddlynmem/blob/main/README.md
+and import the TiddlyWiki in the current directory into Nowledge Mem.
 ```
 
-## Run it yourself
+## Human Usage
 
-Run from the TiddlyWiki root directory:
+Run from the TiddlyWiki directory containing `tiddlywiki.info`:
+
+### 1. Plan
+
+Create and review a saved plan. This does not write to Nowledge Mem or modify source tiddlers.
 
 ```bash
 npx tiddlynmem plan
-npx tiddlynmem apply
 ```
 
-Review the plan before applying it. All options belong to `plan`; `apply` takes no options and executes that saved plan.
+### 2. Apply
 
-## Common usage
-
-Filter by an exact TiddlyWiki tag:
+After reviewing and confirming the plan:
 
 ```bash
-npx tiddlynmem plan --tag "Project Alpha"
 npx tiddlynmem apply
 ```
 
-Import a limited batch:
+`apply` accepts no options and executes `.tiddlynmem/plan.json`.
 
-```bash
-npx tiddlynmem plan --limit 20
-npx tiddlynmem apply
-```
+## Connect to a remote Nowledge Mem service
 
-Use another Nowledge Mem endpoint:
+Set the endpoint and API key before planning:
 
 ```bash
 export NMEM_API_URL="https://mem.example.com"
 export NMEM_API_KEY="nmem_..."
 npx tiddlynmem plan
-npx tiddlynmem apply
 ```
 
-The default endpoint is `http://127.0.0.1:14242`. `--api-url` overrides both the default and `NMEM_API_URL`. The `nmem` CLI is not required.
-
-Set a portable Wiki identity when the Wiki may move between paths or computers:
-
-```bash
-npx tiddlynmem plan --wiki-id personal-notes
-npx tiddlynmem apply
-```
+`--api-url` overrides `NMEM_API_URL`. Without either, the default endpoint is `http://127.0.0.1:14242`. Credentials are read only from `NMEM_API_KEY`. The `nmem` CLI is not required.
 
 ## CLI reference
 
@@ -75,9 +61,12 @@ npx tiddlynmem apply
 | `--limit <count>` | Process at most this many importable tiddlers |
 | `--jobs <count>` | Concurrent writes; default: `4` |
 | `--space-id <id>` | Nowledge Mem space; default: `default` |
-| `--wiki-id <id>` | Stable portable Wiki identity |
-| `--include-sensitive` | Include titles matched by the sensitive-title filter |
+| `--wiki-id <id>` | Keep Memory IDs stable when the Wiki moves |
+| `--include-sensitive` | Include titles with sensitive terms such as `API key` |
 | `--api-url <url>` | Nowledge Mem HTTP or HTTPS endpoint |
+
+| Global option | Description |
+| --- | --- |
 | `-h`, `--help` | Show help |
 | `-V`, `--version` | Show version |
 
@@ -92,15 +81,17 @@ npx tiddlynmem apply
 - Saves IDs, options, and content fingerprints to `.tiddlynmem/plan.json` without saving tiddler bodies or credentials.
 - Rejects `apply` if the Wiki changed after `plan`.
 - Omits embedded data-URI images and warns about local image references.
-- Skips system tiddlers, drafts, empty content, unsupported binary types, previously imported tiddlers, and sensitive-looking titles.
+- Skips system tiddlers, drafts, empty content, unsupported binary types, previously imported tiddlers, and titles with sensitive terms such as `API key`.
 - Accepts titles up to 200 characters and bodies up to 32,768 characters; invalid entries are reported without truncation.
-- Never changes source text. `apply` only adds `$:/NowledgeMem` after the Memory API confirms the requested ID.
+- Never changes a tiddler's body text. After each confirmed Memory write, `apply` only adds the `$:/NowledgeMem` marker tag.
 
 ## Troubleshooting
 
 `Current directory is not a TiddlyWiki root` means the current directory does not contain a readable `tiddlywiki.info`.
 
 `No saved plan found` or `changed after planning` means you must run and review `npx tiddlynmem plan` again before `npx tiddlynmem apply`.
+
+Nowledge Mem health-check errors mean the selected REST service is unavailable or unhealthy. Start the service or set `--api-url` or `NMEM_API_URL` to the correct endpoint before rerunning `apply`.
 
 For `imported:tag-failed`, the Memory already exists but the source marker was not saved. Fix the reported file or permission issue and rerun the same command.
 
@@ -114,6 +105,7 @@ npm ci
 npm run typecheck
 npm test
 npm run build
+npm run check:package
 ```
 
 Source files are TypeScript and run with [Nub](https://github.com/nubjs/nub). Generated package files are written to the ignored `dist/` directory.
