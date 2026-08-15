@@ -11,7 +11,10 @@ Import TiddlyWiki tiddlers into [Nowledge Mem](https://mem.nowledge.co/) as AI m
 ## Copy to AI
 
 ```text
-Read https://github.com/ThaddeusJiang/tiddlynmem/blob/main/README.md, then plan and apply the TiddlyWiki import in the current directory.
+Read the project instructions:
+https://github.com/ThaddeusJiang/tiddlynmem/blob/main/README.md
+
+Then plan and apply the TiddlyWiki import in the current directory.
 ```
 
 ## Run it yourself
