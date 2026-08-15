@@ -1,5 +1,11 @@
 # tiddlynmem
 
+[![npm version](https://img.shields.io/npm/v/tiddlynmem.svg)](https://www.npmjs.com/package/tiddlynmem)
+[![npm downloads](https://img.shields.io/npm/dw/tiddlynmem.svg)](https://www.npmjs.com/package/tiddlynmem)
+[![CI](https://github.com/ThaddeusJiang/tiddlynmem/actions/workflows/ci.yml/badge.svg)](https://github.com/ThaddeusJiang/tiddlynmem/actions/workflows/ci.yml)
+[![Node.js](https://img.shields.io/node/v/tiddlynmem.svg)](https://www.npmjs.com/package/tiddlynmem)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+
 Import TiddlyWiki tiddlers into [Nowledge Mem](https://mem.nowledge.co/) as AI memories.
 
 ## Copy to AI
