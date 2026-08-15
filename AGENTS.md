@@ -155,8 +155,9 @@ Every GitHub Actions `uses:` reference must be pinned to a full commit SHA with 
 - Use Semantic Versioning. For npm version `X.Y.Z`, use `vX.Y.Z` as the corresponding Git tag and GitHub Release name.
 - Update `CHANGELOG.md` before a release and keep an empty `Unreleased` section above the released version.
 - Run `npm ci`, `npm run typecheck`, `npm test`, `npm run build`, `npm run check:package`, and `npm publish --dry-run` from a clean checkout of the release commit.
-- The first npm publication must be performed interactively by an npm maintainer with account-level 2FA because npm requires a package to exist before a Trusted Publisher can be configured.
-- After the first publication, configure npm Trusted Publishing for a pinned GitHub Actions workflow and use OIDC instead of storing a long-lived npm publish token.
+- The first npm publication was performed interactively by an npm maintainer with account-level 2FA. Future versions publish through `.github/workflows/publish-npm.yml` after the corresponding GitHub Release is published.
+- Keep the npm Trusted Publisher bound to GitHub user `ThaddeusJiang`, repository `tiddlynmem`, workflow filename `publish-npm.yml`, no environment, and only the `npm publish` allowed action.
+- The publish workflow must use OIDC without `NPM_TOKEN`, validate the release tag against `package.json`, publish stable releases to `latest`, and publish GitHub prereleases to `next`.
 - While the GitHub repository is private, npm Trusted Publishing remains available but npm provenance cannot be generated.
 - Never publish, create a tag, create a GitHub Release, or change repository visibility without explicit user authorization.
 
