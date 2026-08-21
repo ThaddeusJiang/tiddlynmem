@@ -9,6 +9,10 @@ import {
   toIsoTimestamp,
   type TiddlerRecord,
 } from "./core.ts";
+import {
+  sourceFileDigest,
+  type TiddlerFileInfo,
+} from "./source-file.ts";
 
 interface TiddlyWikiFields {
   [key: string]: unknown;
@@ -27,6 +31,7 @@ interface TiddlyWikiRuntime {
   boot: {
     argv: string[];
     boot(callback: () => void): void;
+    files: Record<string, TiddlerFileInfo | undefined>;
   };
   wiki: {
     getTiddler(title: string): TiddlyWikiTiddler | undefined;
@@ -74,9 +79,9 @@ function sendRecords(records: TiddlerRecord[], index = 0): void {
   });
 }
 
-const tw = TiddlyWiki();
-tw.boot.argv = [wikiPath, "--output", tmpdir()];
-tw.boot.boot(() => {
+async function collectRecords(
+  tw: TiddlyWikiRuntime,
+): Promise<TiddlerRecord[]> {
   const titles = tw.wiki.getTiddlers({ includeSystem: true });
   const records: TiddlerRecord[] = [];
 
@@ -125,23 +130,41 @@ tw.boot.boot(() => {
           ? fields.type
           : "text/vnd.tiddlywiki",
     };
+    const classification = classifyTiddler(record, {
+      includeImported: true,
+      includeSensitive,
+    });
 
+    if (classification === "ready") {
+      const fileInfo = tw.boot.files[title];
+      if (fileInfo) {
+        record.sourceFileDigest = await sourceFileDigest(fileInfo);
+      }
+    }
     if (
-      classifyTiddler(record, {
-        includeImported: true,
-        includeSensitive,
-      }) === "ready" &&
+      classification === "ready" &&
       (record.type === "text/vnd.tiddlywiki" || record.type === "")
     ) {
       try {
         record.html = tw.wiki.renderTiddler("text/html", title);
       } catch (error) {
-        record.renderError = error instanceof Error ? error.message : String(error);
+        record.renderError =
+          error instanceof Error ? error.message : String(error);
       }
     }
 
     records.push(record);
   }
+  return records;
+}
 
-  sendRecords(records);
+const tw = TiddlyWiki();
+tw.boot.argv = [wikiPath, "--output", tmpdir()];
+tw.boot.boot(() => {
+  void collectRecords(tw).then(sendRecords).catch((error) => {
+    process.stderr.write(
+      `${error instanceof Error ? error.message : String(error)}\n`,
+    );
+    process.exit(1);
+  });
 });

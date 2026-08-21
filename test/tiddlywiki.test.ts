@@ -9,6 +9,7 @@ import {
   NMEM_DIGEST_FIELD,
   NMEM_URI_FIELD,
   NOWLEDGE_MEM_TAG,
+  type TiddlerRecord,
 } from "../src/core.ts";
 import {
   loadWiki,
@@ -19,6 +20,13 @@ import {
 const fixture = resolve(
   fileURLToPath(new URL("./fixtures/wiki", import.meta.url)),
 );
+
+function sourceFileSnapshot(record: TiddlerRecord): {
+  sourceFileDigest: string;
+} {
+  assert.ok(record.sourceFileDigest);
+  return { sourceFileDigest: record.sourceFileDigest };
+}
 
 test("TiddlyWiki workers do not inherit the Memory API key", () => {
   assert.deepEqual(
@@ -115,6 +123,7 @@ test("recordWikiSync writes sync metadata exactly once", async (t) => {
 
   const syncRecord = {
     digest: `sha256:${"a".repeat(64)}`,
+    ...sourceFileSnapshot(beforeRecord),
     title: "Multiline",
     uri: "nowledgemem://memory/12345678-1234-5123-8123-123456789abc",
   };
@@ -150,10 +159,72 @@ test("recordWikiSync writes sync metadata exactly once", async (t) => {
   );
 });
 
+test("recordWikiSync rejects a concurrent source edit without overwriting it", async (t) => {
+  const temporaryRoot = await mkdtemp(resolve(tmpdir(), "tiddlynmem-test-"));
+  const wikiPath = resolve(temporaryRoot, "wiki");
+  const tiddlerCount = 200;
+  await cp(fixture, wikiPath, { recursive: true });
+  await Promise.all(
+    Array.from({ length: tiddlerCount }, async (_, index) => {
+      const title = `Race ${String(index).padStart(3, "0")}`;
+      await writeFile(
+        resolve(wikiPath, "tiddlers", `${title}.tid`),
+        `title: ${title}\ntags: Race\ntype: text/plain\n\nOriginal body ${index}.\n`,
+        "utf8",
+      );
+    }),
+  );
+  t.after(async () => {
+    await rm(temporaryRoot, { force: true, recursive: true });
+  });
+
+  const before = await loadWiki(wikiPath, { tag: "Race" });
+  const syncRecords = before.records.map((record, index) => ({
+    digest: `sha256:${index.toString(16).padStart(64, "0")}`,
+    ...sourceFileSnapshot(record),
+    title: record.title,
+    uri: "nowledgemem://memory/12345678-1234-5123-8123-123456789abc",
+  }));
+  const firstPath = resolve(wikiPath, "tiddlers", "Race 000.tid");
+  const lastTitle = `Race ${String(tiddlerCount - 1).padStart(3, "0")}`;
+  const lastPath = resolve(wikiPath, "tiddlers", `${lastTitle}.tid`);
+  const syncing = recordWikiSync(wikiPath, syncRecords);
+
+  let firstWriteObserved = false;
+  for (let attempt = 0; attempt < 2_000; attempt += 1) {
+    if ((await readFile(firstPath, "utf8")).includes("nmem-digest:")) {
+      firstWriteObserved = true;
+      break;
+    }
+    await new Promise((resolveWait) => setTimeout(resolveWait, 5));
+  }
+  assert.equal(firstWriteObserved, true);
+  await writeFile(
+    lastPath,
+    (await readFile(lastPath, "utf8")).replace(
+      `Original body ${tiddlerCount - 1}.`,
+      "Concurrent user edit.",
+    ),
+    "utf8",
+  );
+
+  const results = await syncing;
+  assert.deepEqual(results.at(-1), {
+    error:
+      "The source file changed after apply scanning. Run plan again before retrying.",
+    status: "failed",
+    title: lastTitle,
+  });
+  const finalSource = await readFile(lastPath, "utf8");
+  assert.match(finalSource, /Concurrent user edit\./u);
+  assert.doesNotMatch(finalSource, /nmem-digest:/u);
+});
+
 test("recordWikiSync reports a missing source tiddler without writing", async () => {
   const result = await recordWikiSync(fixture, [
     {
       digest: `sha256:${"a".repeat(64)}`,
+      sourceFileDigest: `sha256:${"b".repeat(64)}`,
       title: "Missing",
       uri: "nowledgemem://memory/12345678-1234-5123-8123-123456789abc",
     },
@@ -186,9 +257,14 @@ test("recordWikiSync does not rewrite an unsupported source file", async (t) => 
     await rm(temporaryRoot, { force: true, recursive: true });
   });
 
+  const before = await loadWiki(wikiPath);
+  const first = before.records.find((record) => record.title === "First");
+  assert.ok(first);
+
   const result = await recordWikiSync(wikiPath, [
     {
       digest: `sha256:${"a".repeat(64)}`,
+      ...sourceFileSnapshot(first),
       title: "First",
       uri: "nowledgemem://memory/12345678-1234-5123-8123-123456789abc",
     },
@@ -221,8 +297,15 @@ test("recordWikiSync preserves a Markdown file with a metadata sidecar", async (
     await rm(temporaryRoot, { force: true, recursive: true });
   });
 
+  const before = await loadWiki(wikiPath);
+  const markdownRecord = before.records.find(
+    (record) => record.title === "Markdown",
+  );
+  assert.ok(markdownRecord);
+
   const syncRecord = {
     digest: `sha256:${"b".repeat(64)}`,
+    ...sourceFileSnapshot(markdownRecord),
     title: "Markdown",
     uri: "nowledgemem://memory/12345678-1234-5123-8123-123456789abc",
   };

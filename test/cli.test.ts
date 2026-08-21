@@ -726,5 +726,48 @@ test("apply rejects TiddlyWiki drift after planning", async (t) => {
   });
 
   assert.equal(applyResult.code, 1);
+  assert.match(applyResult.stdout, /Mode: apply/u);
+  assert.match(applyResult.stdout, /\[ready:create\] Multiline/u);
   assert.match(applyResult.stderr, /changed after planning/u);
+});
+
+test("apply prints exact scan failures before rejecting plan drift", async (t) => {
+  const temporaryRoot = await mkdtemp(resolve(tmpdir(), "tiddlynmem-cli-test-"));
+  const wikiPath = resolve(temporaryRoot, "wiki");
+  const fixture = fileURLToPath(new URL("./fixtures/wiki", import.meta.url));
+  const cliPath = fileURLToPath(new URL("../src/cli.ts", import.meta.url));
+  const tiddlerPath = resolve(wikiPath, "tiddlers", "Multiline.tid");
+  await cp(fixture, wikiPath, { recursive: true });
+  t.after(async () => {
+    await rm(temporaryRoot, { force: true, recursive: true });
+  });
+
+  const planResult = await run(
+    "nub",
+    [cliPath, "plan", "--tag", "long tag"],
+    { cwd: wikiPath, env: process.env },
+  );
+  assert.equal(planResult.code, 0, planResult.stderr);
+  const source = await readFile(tiddlerPath, "utf8");
+  await writeFile(
+    tiddlerPath,
+    source.replace("title: Multiline\n", "title: Multiline\nnmem-digest: invalid\n"),
+    "utf8",
+  );
+
+  const applyResult = await run("nub", [cliPath, "apply"], {
+    cwd: wikiPath,
+    env: process.env,
+  });
+
+  assert.equal(applyResult.code, 1);
+  assert.match(applyResult.stdout, /\[failed:sync-metadata\] Multiline/u);
+  assert.match(
+    applyResult.stdout,
+    /Error: Invalid nmem-digest field: invalid/u,
+  );
+  assert.match(applyResult.stdout, /Failed: 1/u);
+  assert.doesNotMatch(applyResult.stdout, /Importing/u);
+  assert.match(applyResult.stderr, /changed after planning/u);
+  await access(resolve(wikiPath, ".tiddlynmem", "plan.json"));
 });

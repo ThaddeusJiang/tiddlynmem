@@ -87,6 +87,7 @@ npx tiddlynmem plan
 - Skips system tiddlers, drafts, empty content, unsupported binary types, unchanged synced tiddlers, and titles with sensitive terms such as `API key`.
 - Accepts titles up to 200 characters and bodies up to 32,768 characters; invalid entries are reported without truncation.
 - Never changes a tiddler's body text or source `modified` value. After each confirmed Memory write, `apply` writes only the `$:/NowledgeMem` marker tag, `nmem-uri`, and `nmem-digest`.
+- Verifies the scanned source snapshot immediately before sync-state writeback. A concurrent source edit fails writeback instead of being overwritten.
 
 Existing tiddlers that have only the historical `$:/NowledgeMem` marker are migrated by an idempotent upsert during the next reviewed plan and apply. Use the same API URL, `--space-id`, and `--wiki-id` that created the original Memories; the original `--wiki-id` is required if the Wiki moved or the first import used an explicit override. Selecting another API URL or space intentionally produces update actions because the synchronization destination changed.
 
@@ -98,7 +99,7 @@ Existing tiddlers that have only the historical `$:/NowledgeMem` marker are migr
 
 Nowledge Mem health-check errors mean the selected REST service is unavailable or unhealthy. Start the service or set `--api-url` or `NMEM_API_URL` to the correct endpoint before rerunning `apply`.
 
-For `imported:writeback-failed`, the Memory was created or updated but its source sync fields were not saved. Fix the reported file or permission issue and rerun bare `apply` with the preserved plan.
+For `imported:writeback-failed`, the Memory was created or updated but its source sync fields were not saved. Fix the reported file or permission issue and rerun bare `apply` with the preserved plan. If the source changed after apply scanning, review the edit and run a new `plan` before applying again.
 
 `failed:sync-metadata` means a tiddler has an invalid `nmem-uri`, an invalid `nmem-digest`, inconsistent sync fields, or a Memory ID also linked by another tiddler. Correct the conflicting fields instead of allowing tiddlynmem to guess which Memory to overwrite.
 

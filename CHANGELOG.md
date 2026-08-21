@@ -13,6 +13,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added reviewed create, update, and legacy-marker migration actions while unchanged synced tiddlers are skipped.
 - Preserved the stored Memory ID across tiddler edits and title changes.
 
+### Fixed
+
+- Prevented sync-state writeback from overwriting concurrent source edits, and printed exact per-tiddler scan failures before apply rejects plan drift.
+
 ## [0.1.0] - 2026-08-15
 
 ### Added

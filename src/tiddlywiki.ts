@@ -33,6 +33,7 @@ interface WorkerMessage {
 
 export interface TiddlerSyncRecord {
   digest: string;
+  sourceFileDigest: string;
   title: string;
   uri: string;
 }

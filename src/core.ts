@@ -28,6 +28,7 @@ export interface TiddlerRecord {
   nmemDigest?: string;
   nmemUri?: string;
   renderError?: string;
+  sourceFileDigest?: string;
   tags?: string | string[];
   text: string;
   title: string;

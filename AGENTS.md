@@ -17,7 +17,7 @@ This file is the development and contribution contract for AI coding agents work
 - Only the `apply` command may write to Nowledge Mem or modify source tiddlers. `plan` may only replace its local, body-free saved-plan artifact. After a specific Memory write succeeds, record `$:/NowledgeMem`, `nmem-uri`, and `nmem-digest` on that source tiddler without changing its text, source `modified` value, or duplicating the tag.
 - Treat `$:/NowledgeMem` as the historical imported marker and `nmem-uri` plus `nmem-digest` as the current synchronization state. The self-describing `sha256:<hex>` digest covers the Memory payload, selected API URL, and space. Convert managed tiddlers during scans: classify matching digests as `skipped:unchanged`, changed digests as `ready:update`, and marker-only or incomplete valid state as `ready:migrate`. Never write an unchanged Memory.
 - When `--tag <tag>` is present, filter exact matching tiddlers inside the TiddlyWiki worker before WikiText rendering. Only matching records enter scanning, terminal output, classification, conversion, or import. Normal safety classification still applies after this input filter.
-- Never write sync tags or fields to plan-only, skipped, conversion-failed, render-failed, or Memory-API-failed tiddlers. Never move or delete source tiddlers.
+- Never write sync tags or fields to plan-only, skipped, conversion-failed, render-failed, or Memory-API-failed tiddlers. Before sync-state writeback, verify the raw source file against the apply scan snapshot; reject a concurrent edit instead of overwriting it. Never move or delete source tiddlers.
 - Do not require the `nmem` CLI at runtime. Both `plan` and `apply` must work without it.
 - During `plan`, resolve the REST API URL in this order: `--api-url`, `NMEM_API_URL`, then `http://127.0.0.1:14242`, and store the resolved non-credential URL in the saved plan.
 - Check the selected service's `/health` endpoint directly before writing.
@@ -84,7 +84,7 @@ Before any `apply` network request, load the saved plan, rescan and classify the
 
 The saved plan is an internal execution artifact, not a report. Write it atomically with owner-only permissions. Store the resolved options, package version, Wiki path fingerprint, Memory IDs, and SHA-256 content fingerprints. Never store tiddler bodies, source tags, API keys, or raw API responses in it. Starting a new `plan` must discard any previous saved plan so a failed plan cannot leave an older plan eligible for apply.
 
-Source synchronization writeback is a post-upsert phase. Collect only titles, canonical `nowledgemem://memory/<id>` URIs, and self-describing payload-and-destination digests whose Memory REST request succeeded; send them over IPC instead of command-line arguments, and persist them serially through TiddlyWiki's file serializer. The sync worker must treat already-current state as success to remain race-safe and must preserve source text and `modified`. Only rewrite regular `application/x-tiddler` files or independently editable files with an existing `.meta` sidecar; fail safely for shared or unsupported formats. A writeback failure must be visible in terminal output and produce an unsuccessful exit without misreporting the already completed Memory write.
+Source synchronization writeback is a post-upsert phase. Collect only titles, canonical `nowledgemem://memory/<id>` URIs, self-describing payload-and-destination digests, and body-free source snapshot digests whose Memory REST request succeeded; send them over IPC instead of command-line arguments, and persist them serially through TiddlyWiki's file serializer. Immediately before each write, compare the raw source file with the apply scan snapshot; reject drift instead of saving a stale TiddlyWiki snapshot. The sync worker must treat already-current state as success to remain race-safe and must preserve source text and `modified`. Only rewrite regular `application/x-tiddler` files or independently editable files with an existing `.meta` sidecar; fail safely for shared or unsupported formats. A writeback failure must be visible in terminal output and produce an unsuccessful exit without misreporting the already completed Memory write.
 
 Conversion behavior is type-dependent:
 
@@ -135,7 +135,7 @@ Tests must cover behavior, not implementation details. Add or update tests when 
 - Markdown data-URI omission and local-media warnings
 - worker IPC and multiline content
 - worker credential isolation and apply preflight output
-- post-upsert source URI/digest writeback, legacy-marker migration, change detection, rename-stable updates, idempotence, and source-text/modified preservation
+- post-upsert source URI/digest writeback, legacy-marker migration, change detection, rename-stable updates, idempotence, concurrent-edit rejection, and source-text/modified preservation
 - npm package name, executable mapping, and packed CLI startup
 
 Every GitHub Actions `uses:` reference must be pinned to a full commit SHA with the readable action version in an inline comment.

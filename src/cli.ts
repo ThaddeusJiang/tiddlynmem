@@ -49,6 +49,7 @@ const packageVersion = (require("../package.json") as { version: string }).versi
 interface MemoryCandidate extends MemoryInput {
   action: SyncAction;
   digest: string;
+  sourceFileDigest: string;
   warnings: string[];
 }
 
@@ -226,6 +227,31 @@ function formatResultEntries(entries: ResultEntry[]): string {
     }
   }
   return lines.join("\n");
+}
+
+function writeResultSummary(
+  command: "apply" | "plan",
+  entries: ResultEntry[],
+  summary: ImportSummary,
+  savedPlanWritten = false,
+): void {
+  process.stdout.write(
+    [
+      `Mode: ${command}`,
+      formatResultEntries(entries),
+      `Scanned: ${summary.scanned}`,
+      `Ready: ${summary.ready}`,
+      formatSkippedSummary(summary.skipped),
+      `Imported: ${summary.imported}`,
+      `Recorded: ${summary.recorded}`,
+      `Failed: ${summary.failed}`,
+      `Warnings: ${summary.warnings}`,
+      ...(savedPlanWritten
+        ? [`Saved plan: ${SAVED_PLAN_RELATIVE_PATH}`]
+        : []),
+      "",
+    ].join("\n"),
+  );
 }
 
 async function main(): Promise<void> {
@@ -463,6 +489,19 @@ async function main(): Promise<void> {
         continue;
       }
 
+      if (!tiddler.sourceFileDigest) {
+        summary.failed += 1;
+        entries.push({
+          error: "The source tiddler is not backed by a readable file.",
+          id: memory.id,
+          sourceWiki,
+          status: "failed:source",
+          tags: sourceTags,
+          title: memory.title,
+          warnings,
+        });
+        continue;
+      }
       const action = syncAction({
         hasDigest: Boolean(tiddler.nmemDigest),
         hasMarker,
@@ -472,6 +511,7 @@ async function main(): Promise<void> {
         ...memory,
         action,
         digest,
+        sourceFileDigest: tiddler.sourceFileDigest,
         warnings,
       };
       memories.push(candidate);
@@ -490,12 +530,17 @@ async function main(): Promise<void> {
   }
 
   if (applying) {
-    if (summary.failed > 0 || hasUnplannedAction) {
-      throw new Error(
-        'The TiddlyWiki changed after planning. Run "tiddlynmem plan" again before applying.',
-      );
+    try {
+      if (summary.failed > 0 || hasUnplannedAction) {
+        throw new Error(
+          'The TiddlyWiki changed after planning. Run "tiddlynmem plan" again before applying.',
+        );
+      }
+      assertSavedPlanMatches(savedPlan!, scannedMemories);
+    } catch (error) {
+      writeResultSummary(options.command, entries, summary);
+      throw error;
     }
-    assertSavedPlanMatches(savedPlan!, scannedMemories);
   } else if (summary.failed === 0) {
     await savePlan({
       memories,
@@ -531,6 +576,7 @@ async function main(): Promise<void> {
     process.stdout.write(`Importing ${memories.length} memories...\n`);
     const importedRecords: Array<{
       digest: string;
+      sourceFileDigest: string;
       title: string;
       uri: string;
     }> = [];
@@ -548,6 +594,7 @@ async function main(): Promise<void> {
         summary.imported += 1;
         importedRecords.push({
           digest: memory.digest,
+          sourceFileDigest: memory.sourceFileDigest,
           title: memory.title,
           uri: memoryUri(memory.id),
         });
@@ -599,22 +646,11 @@ async function main(): Promise<void> {
     }
   }
 
-  process.stdout.write(
-    [
-      `Mode: ${options.command}`,
-      formatResultEntries(entries),
-      `Scanned: ${summary.scanned}`,
-      `Ready: ${summary.ready}`,
-      formatSkippedSummary(summary.skipped),
-      `Imported: ${summary.imported}`,
-      `Recorded: ${summary.recorded}`,
-      `Failed: ${summary.failed}`,
-      `Warnings: ${summary.warnings}`,
-      ...(!applying && summary.failed === 0
-        ? [`Saved plan: ${SAVED_PLAN_RELATIVE_PATH}`]
-        : []),
-      "",
-    ].join("\n"),
+  writeResultSummary(
+    options.command,
+    entries,
+    summary,
+    !applying && summary.failed === 0,
   );
 
   if (summary.failed > 0) {

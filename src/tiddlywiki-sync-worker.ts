@@ -2,12 +2,10 @@ import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 
 import { NMEM_DIGEST_FIELD, NMEM_URI_FIELD } from "./core.ts";
-
-interface TiddlerFileInfo {
-  filepath: string;
-  hasMetaFile: boolean;
-  type: string;
-}
+import {
+  sourceFileDigest,
+  type TiddlerFileInfo,
+} from "./source-file.ts";
 
 interface TiddlyWikiTiddler {
   fields: {
@@ -40,6 +38,7 @@ interface TiddlyWikiRuntime {
 
 interface SyncRecord {
   digest: string;
+  sourceFileDigest: string;
   title: string;
   uri: string;
 }
@@ -71,6 +70,9 @@ function isSyncRecord(value: unknown): value is SyncRecord {
     "digest" in value &&
     typeof value.digest === "string" &&
     /^sha256:[0-9a-f]{64}$/u.test(value.digest) &&
+    "sourceFileDigest" in value &&
+    typeof value.sourceFileDigest === "string" &&
+    /^sha256:[0-9a-f]{64}$/u.test(value.sourceFileDigest) &&
     "title" in value &&
     typeof value.title === "string" &&
     "uri" in value &&
@@ -126,11 +128,24 @@ async function recordSyncState(
   request: SyncRequest,
 ): Promise<void> {
   for (const record of request.records) {
-    const { digest, title, uri } = record;
+    const { digest, sourceFileDigest: expectedFileDigest, title, uri } = record;
     try {
       const tiddler = tw.wiki.getTiddler(title);
       if (!tiddler) {
         throw new Error("The source tiddler no longer exists.");
+      }
+
+      const fileInfo = tw.boot.files[title];
+      if (!fileInfo) {
+        throw new Error("The source tiddler is not backed by a writable file.");
+      }
+      if (
+        !fileInfo.hasMetaFile &&
+        fileInfo.type !== "application/x-tiddler"
+      ) {
+        throw new Error(
+          `Refusing to rewrite unsupported source file type ${fileInfo.type}.`,
+        );
       }
 
       const tags = Array.isArray(tiddler.fields.tags)
@@ -144,17 +159,9 @@ async function recordSyncState(
         await send({ status: "already-current", title, type: "result" });
         continue;
       }
-
-      const fileInfo = tw.boot.files[title];
-      if (!fileInfo) {
-        throw new Error("The source tiddler is not backed by a writable file.");
-      }
-      if (
-        !fileInfo.hasMetaFile &&
-        fileInfo.type !== "application/x-tiddler"
-      ) {
+      if ((await sourceFileDigest(fileInfo)) !== expectedFileDigest) {
         throw new Error(
-          `Refusing to rewrite unsupported source file type ${fileInfo.type}.`,
+          "The source file changed after apply scanning. Run plan again before retrying.",
         );
       }
 
