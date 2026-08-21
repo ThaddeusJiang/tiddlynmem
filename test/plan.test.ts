@@ -72,6 +72,13 @@ test("saved plans contain options and fingerprints without tiddler content", asy
     command: "apply",
   });
   assert.doesNotThrow(() => assertSavedPlanMatches(plan, [memory]));
+  assert.doesNotThrow(() =>
+    assertSavedPlanMatches(plan, [
+      memory,
+      { ...memory, id: "other-id", title: "Unplanned" },
+    ]),
+  );
+  assert.throws(() => assertSavedPlanMatches(plan, []), /changed after planning/u);
   assert.throws(
     () =>
       assertSavedPlanMatches(plan, [

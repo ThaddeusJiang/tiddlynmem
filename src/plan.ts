@@ -47,7 +47,7 @@ function wikiFingerprint(wikiPath: string): string {
   return hash(resolve(wikiPath).normalize("NFC"));
 }
 
-function memoryFingerprint(memory: MemoryInput): string {
+export function memoryFingerprint(memory: MemoryInput): string {
   return hash(
     JSON.stringify({
       content: memory.content,
@@ -60,6 +60,19 @@ function memoryFingerprint(memory: MemoryInput): string {
       wikiId: memory.wikiId,
     }),
   );
+}
+
+export function memorySyncDigest(
+  memory: MemoryInput,
+  destination: { apiUrl: string; spaceId: string },
+): string {
+  return `sha256:${hash(
+    JSON.stringify({
+      apiUrl: destination.apiUrl,
+      memory: memoryFingerprint(memory),
+      spaceId: destination.spaceId,
+    }),
+  )}`;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -197,11 +210,15 @@ export function assertSavedPlanMatches(
   plan: SavedPlan,
   memories: MemoryInput[],
 ): void {
-  const current = memories
-    .map((memory) => ({
-      fingerprint: memoryFingerprint(memory),
-      id: memory.id,
-    }))
+  const currentById = new Map(
+    memories.map((memory) => [
+      memory.id,
+      { fingerprint: memoryFingerprint(memory), id: memory.id },
+    ]),
+  );
+  const current = plan.memories
+    .map((memory) => currentById.get(memory.id))
+    .filter((memory) => memory !== undefined)
     .sort((left, right) => left.id.localeCompare(right.id));
   const planned = [...plan.memories].sort((left, right) =>
     left.id.localeCompare(right.id),
