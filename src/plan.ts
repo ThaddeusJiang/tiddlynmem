@@ -62,17 +62,17 @@ export function memoryFingerprint(memory: MemoryInput): string {
   );
 }
 
-export function memorySyncFingerprint(
+export function memorySyncDigest(
   memory: MemoryInput,
   destination: { apiUrl: string; spaceId: string },
 ): string {
-  return hash(
+  return `sha256:${hash(
     JSON.stringify({
       apiUrl: destination.apiUrl,
       memory: memoryFingerprint(memory),
       spaceId: destination.spaceId,
     }),
-  );
+  )}`;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

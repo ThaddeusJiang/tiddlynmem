@@ -78,15 +78,15 @@ npx tiddlynmem plan
 - Maps every user-owned TiddlyWiki tag to a Memory label, excluding the importer-owned `$:/NowledgeMem` marker.
 - Preserves the Wiki identity, source Wiki, title, user tags, `created`, and `modified` values in Memory metadata.
 - Uses stable Memory IDs so reruns remain idempotent.
-- After a confirmed Memory write, records its canonical `nowledgemem://memory/<id>` location in the `nmem-uri` tiddler field and the last successful payload-and-destination fingerprint in `nmem-sync-fingerprint`.
-- Classifies new tiddlers as `ready:create`, changed synced tiddlers as `ready:update`, legacy `$:/NowledgeMem` markers as `ready:migrate`, and matching fingerprints as `skipped:unchanged`.
+- After a confirmed Memory write, records its canonical `nowledgemem://memory/<id>` location in the `nmem-uri` tiddler field and the last successful payload-and-destination digest as `nmem-digest: sha256:<hex>`.
+- Classifies new tiddlers as `ready:create`, changed synced tiddlers as `ready:update`, legacy `$:/NowledgeMem` markers as `ready:migrate`, and matching digests as `skipped:unchanged`.
 - Uses the Memory ID from `nmem-uri` for updates, so a renamed tiddler continues to update the same Memory.
 - Saves IDs, options, and content fingerprints to `.tiddlynmem/plan.json` without saving tiddler bodies or credentials.
 - Rejects `apply` if the Wiki changed after `plan`.
 - Omits embedded data-URI images and warns about local image references.
 - Skips system tiddlers, drafts, empty content, unsupported binary types, unchanged synced tiddlers, and titles with sensitive terms such as `API key`.
 - Accepts titles up to 200 characters and bodies up to 32,768 characters; invalid entries are reported without truncation.
-- Never changes a tiddler's body text or source `modified` value. After each confirmed Memory write, `apply` writes only the `$:/NowledgeMem` marker tag, `nmem-uri`, and `nmem-sync-fingerprint`.
+- Never changes a tiddler's body text or source `modified` value. After each confirmed Memory write, `apply` writes only the `$:/NowledgeMem` marker tag, `nmem-uri`, and `nmem-digest`.
 
 Existing tiddlers that have only the historical `$:/NowledgeMem` marker are migrated by an idempotent upsert during the next reviewed plan and apply. Use the same API URL, `--space-id`, and `--wiki-id` that created the original Memories; the original `--wiki-id` is required if the Wiki moved or the first import used an explicit override. Selecting another API URL or space intentionally produces update actions because the synchronization destination changed.
 
@@ -100,7 +100,7 @@ Nowledge Mem health-check errors mean the selected REST service is unavailable o
 
 For `imported:writeback-failed`, the Memory was created or updated but its source sync fields were not saved. Fix the reported file or permission issue and rerun bare `apply` with the preserved plan.
 
-`failed:sync-metadata` means a tiddler has an invalid `nmem-uri` or an inconsistent set of sync fields. Correct the field instead of allowing tiddlynmem to guess which Memory to overwrite.
+`failed:sync-metadata` means a tiddler has an invalid `nmem-uri`, an invalid `nmem-digest`, inconsistent sync fields, or a Memory ID also linked by another tiddler. Correct the conflicting fields instead of allowing tiddlynmem to guess which Memory to overwrite.
 
 ## Development
 

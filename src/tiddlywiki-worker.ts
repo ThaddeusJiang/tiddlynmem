@@ -3,8 +3,8 @@ import { createRequire } from "node:module";
 
 import {
   classifyTiddler,
-  NOWLEDGE_MEM_FINGERPRINT_FIELD,
-  NOWLEDGE_MEM_URI_FIELD,
+  NMEM_DIGEST_FIELD,
+  NMEM_URI_FIELD,
   parseTagString,
   toIsoTimestamp,
   type TiddlerRecord,
@@ -106,13 +106,13 @@ tw.boot.boot(() => {
           ? fields["draft.title"]
           : "",
       modified: toIsoTimestamp(fields.modified),
-      nmemSyncFingerprint:
-        typeof fields[NOWLEDGE_MEM_FINGERPRINT_FIELD] === "string"
-          ? fields[NOWLEDGE_MEM_FINGERPRINT_FIELD]
+      nmemDigest:
+        typeof fields[NMEM_DIGEST_FIELD] === "string"
+          ? fields[NMEM_DIGEST_FIELD]
           : "",
       nmemUri:
-        typeof fields[NOWLEDGE_MEM_URI_FIELD] === "string"
-          ? fields[NOWLEDGE_MEM_URI_FIELD]
+        typeof fields[NMEM_URI_FIELD] === "string"
+          ? fields[NMEM_URI_FIELD]
           : "",
       tags:
         typeof fields.tags === "string" || Array.isArray(fields.tags)

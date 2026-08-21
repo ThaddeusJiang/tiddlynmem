@@ -1,10 +1,7 @@
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 
-import {
-  NOWLEDGE_MEM_FINGERPRINT_FIELD,
-  NOWLEDGE_MEM_URI_FIELD,
-} from "./core.ts";
+import { NMEM_DIGEST_FIELD, NMEM_URI_FIELD } from "./core.ts";
 
 interface TiddlerFileInfo {
   filepath: string;
@@ -42,7 +39,7 @@ interface TiddlyWikiRuntime {
 }
 
 interface SyncRecord {
-  fingerprint: string;
+  digest: string;
   title: string;
   uri: string;
 }
@@ -71,9 +68,9 @@ function isSyncRecord(value: unknown): value is SyncRecord {
   return (
     typeof value === "object" &&
     value !== null &&
-    "fingerprint" in value &&
-    typeof value.fingerprint === "string" &&
-    value.fingerprint.length > 0 &&
+    "digest" in value &&
+    typeof value.digest === "string" &&
+    /^sha256:[0-9a-f]{64}$/u.test(value.digest) &&
     "title" in value &&
     typeof value.title === "string" &&
     "uri" in value &&
@@ -129,7 +126,7 @@ async function recordSyncState(
   request: SyncRequest,
 ): Promise<void> {
   for (const record of request.records) {
-    const { fingerprint, title, uri } = record;
+    const { digest, title, uri } = record;
     try {
       const tiddler = tw.wiki.getTiddler(title);
       if (!tiddler) {
@@ -141,8 +138,8 @@ async function recordSyncState(
         : [];
       if (
         tags.includes(request.tag) &&
-        tiddler.fields[NOWLEDGE_MEM_URI_FIELD] === uri &&
-        tiddler.fields[NOWLEDGE_MEM_FINGERPRINT_FIELD] === fingerprint
+        tiddler.fields[NMEM_URI_FIELD] === uri &&
+        tiddler.fields[NMEM_DIGEST_FIELD] === digest
       ) {
         await send({ status: "already-current", title, type: "result" });
         continue;
@@ -162,8 +159,8 @@ async function recordSyncState(
       }
 
       const updated = new tw.Tiddler(tiddler, {
-        [NOWLEDGE_MEM_FINGERPRINT_FIELD]: fingerprint,
-        [NOWLEDGE_MEM_URI_FIELD]: uri,
+        [NMEM_DIGEST_FIELD]: digest,
+        [NMEM_URI_FIELD]: uri,
         tags: tags.includes(request.tag) ? tags : [...tags, request.tag],
       });
       await saveTiddler(tw, updated, fileInfo);

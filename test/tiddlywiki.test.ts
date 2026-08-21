@@ -6,9 +6,9 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 import {
-  NOWLEDGE_MEM_FINGERPRINT_FIELD,
+  NMEM_DIGEST_FIELD,
+  NMEM_URI_FIELD,
   NOWLEDGE_MEM_TAG,
-  NOWLEDGE_MEM_URI_FIELD,
 } from "../src/core.ts";
 import {
   loadWiki,
@@ -114,7 +114,7 @@ test("recordWikiSync writes sync metadata exactly once", async (t) => {
   assert.ok(beforeRecord);
 
   const syncRecord = {
-    fingerprint: "a".repeat(64),
+    digest: `sha256:${"a".repeat(64)}`,
     title: "Multiline",
     uri: "nowledgemem://memory/12345678-1234-5123-8123-123456789abc",
   };
@@ -129,7 +129,7 @@ test("recordWikiSync writes sync metadata exactly once", async (t) => {
   assert.equal(taggedRecord.text, beforeRecord.text);
   assert.equal(taggedRecord.modified, beforeRecord.modified);
   assert.equal(taggedRecord.nmemUri, syncRecord.uri);
-  assert.equal(taggedRecord.nmemSyncFingerprint, syncRecord.fingerprint);
+  assert.equal(taggedRecord.nmemDigest, syncRecord.digest);
   assert.deepEqual(taggedRecord.tags, ["Test", "long tag", NOWLEDGE_MEM_TAG]);
 
   const secondResult = await recordWikiSync(wikiPath, [syncRecord]);
@@ -153,7 +153,7 @@ test("recordWikiSync writes sync metadata exactly once", async (t) => {
 test("recordWikiSync reports a missing source tiddler without writing", async () => {
   const result = await recordWikiSync(fixture, [
     {
-      fingerprint: "a".repeat(64),
+      digest: `sha256:${"a".repeat(64)}`,
       title: "Missing",
       uri: "nowledgemem://memory/12345678-1234-5123-8123-123456789abc",
     },
@@ -188,7 +188,7 @@ test("recordWikiSync does not rewrite an unsupported source file", async (t) => 
 
   const result = await recordWikiSync(wikiPath, [
     {
-      fingerprint: "a".repeat(64),
+      digest: `sha256:${"a".repeat(64)}`,
       title: "First",
       uri: "nowledgemem://memory/12345678-1234-5123-8123-123456789abc",
     },
@@ -222,7 +222,7 @@ test("recordWikiSync preserves a Markdown file with a metadata sidecar", async (
   });
 
   const syncRecord = {
-    fingerprint: "b".repeat(64),
+    digest: `sha256:${"b".repeat(64)}`,
     title: "Markdown",
     uri: "nowledgemem://memory/12345678-1234-5123-8123-123456789abc",
   };
@@ -234,12 +234,9 @@ test("recordWikiSync preserves a Markdown file with a metadata sidecar", async (
   const record = after.records.find((item) => item.title === "Markdown");
   assert.ok(record);
   assert.equal(record.nmemUri, syncRecord.uri);
-  assert.equal(record.nmemSyncFingerprint, syncRecord.fingerprint);
+  assert.equal(record.nmemDigest, syncRecord.digest);
   assert.deepEqual(record.tags, ["Original", NOWLEDGE_MEM_TAG]);
   const metadata = await readFile(metadataPath, "utf8");
-  assert.match(metadata, new RegExp(`^${NOWLEDGE_MEM_URI_FIELD}: `, "mu"));
-  assert.match(
-    metadata,
-    new RegExp(`^${NOWLEDGE_MEM_FINGERPRINT_FIELD}: `, "mu"),
-  );
+  assert.match(metadata, new RegExp(`^${NMEM_URI_FIELD}: `, "mu"));
+  assert.match(metadata, new RegExp(`^${NMEM_DIGEST_FIELD}: sha256:`, "mu"));
 });

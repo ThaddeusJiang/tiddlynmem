@@ -6,8 +6,8 @@ import { gfm } from "turndown-plugin-gfm";
 
 const DNS_NAMESPACE = "6ba7b810-9dad-11d1-80b4-00c04fd430c8";
 export const NOWLEDGE_MEM_TAG = "$:/NowledgeMem";
-export const NOWLEDGE_MEM_URI_FIELD = "nmem-uri";
-export const NOWLEDGE_MEM_FINGERPRINT_FIELD = "nmem-sync-fingerprint";
+export const NMEM_URI_FIELD = "nmem-uri";
+export const NMEM_DIGEST_FIELD = "nmem-digest";
 const MEMORY_ID_PATTERN =
   "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{12}";
 const IMPORTABLE_TYPES = new Set([
@@ -25,7 +25,7 @@ export interface TiddlerRecord {
   draftTitle?: string;
   html?: string;
   modified?: Date | string;
-  nmemSyncFingerprint?: string;
+  nmemDigest?: string;
   nmemUri?: string;
   renderError?: string;
   tags?: string | string[];
@@ -110,6 +110,10 @@ export function classifyTiddler(
     return "sensitive";
   }
   return "ready";
+}
+
+export function isMemoryDigest(value: string): boolean {
+  return /^sha256:[0-9a-f]{64}$/u.test(value);
 }
 
 export function memoryIdFromUri(uri: string): string | undefined {

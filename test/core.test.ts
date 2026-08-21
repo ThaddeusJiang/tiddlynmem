@@ -6,6 +6,7 @@ import {
   classifyTiddler,
   findMediaReferences,
   htmlToMarkdown,
+  isMemoryDigest,
   isSensitiveTitle,
   memoryIdFromUri,
   memoryUri,
@@ -91,7 +92,15 @@ test("Memory URIs preserve deterministic Memory IDs", () => {
 
   assert.equal(memoryUri(id), `nowledgemem://memory/${id}`);
   assert.equal(memoryIdFromUri(memoryUri(id)), id);
+  assert.equal(memoryIdFromUri("nowledgemem://memory/not-a-uuid"), undefined);
+  assert.equal(memoryIdFromUri(`${memoryUri(id)}/extra`), undefined);
   assert.equal(memoryIdFromUri("https://example.com/memory/invalid"), undefined);
+});
+
+test("Memory digests expose their SHA-256 algorithm", () => {
+  assert.equal(isMemoryDigest(`sha256:${"a".repeat(64)}`), true);
+  assert.equal(isMemoryDigest("a".repeat(64)), false);
+  assert.equal(isMemoryDigest("sha256:not-a-digest"), false);
 });
 
 test("stableMemoryId is stable and separates Wiki identities", () => {

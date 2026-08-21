@@ -10,6 +10,7 @@ import {
   classifyTiddler,
   findMediaReferences,
   htmlToMarkdown,
+  isMemoryDigest,
   memoryIdFromUri,
   memoryUri,
   NOWLEDGE_MEM_TAG,
@@ -32,7 +33,7 @@ import {
   assertSavedPlanMatches,
   discardSavedPlan,
   loadSavedPlan,
-  memorySyncFingerprint,
+  memorySyncDigest,
   optionsFromSavedPlan,
   savePlan,
   SAVED_PLAN_RELATIVE_PATH,
@@ -47,7 +48,7 @@ const packageVersion = (require("../package.json") as { version: string }).versi
 
 interface MemoryCandidate extends MemoryInput {
   action: SyncAction;
-  fingerprint: string;
+  digest: string;
   warnings: string[];
 }
 
@@ -155,6 +156,20 @@ function formatSkippedSummary(skipped: Record<SkipReason, number>): string {
   return `Skipped: ${total} (${reasons
     .map(([reason, count]) => `${reason}: ${count}`)
     .join(", ")})`;
+}
+
+function syncAction(state: {
+  hasDigest: boolean;
+  hasMarker: boolean;
+  hasUri: boolean;
+}): SyncAction {
+  if (state.hasDigest && state.hasMarker && state.hasUri) {
+    return "update";
+  }
+  if (state.hasMarker || state.hasUri) {
+    return "migrate";
+  }
+  return "create";
 }
 
 async function runPool<T>(
@@ -351,10 +366,22 @@ async function main(): Promise<void> {
         });
         continue;
       }
-      if (!tiddler.nmemUri && tiddler.nmemSyncFingerprint) {
+      if (tiddler.nmemDigest && !isMemoryDigest(tiddler.nmemDigest)) {
         summary.failed += 1;
         entries.push({
-          error: "The nmem-sync-fingerprint field exists without nmem-uri.",
+          error: `Invalid nmem-digest field: ${tiddler.nmemDigest}`,
+          sourceWiki,
+          status: "failed:sync-metadata",
+          tags: sourceTags,
+          title: tiddler.title,
+          warnings,
+        });
+        continue;
+      }
+      if (!tiddler.nmemUri && tiddler.nmemDigest) {
+        summary.failed += 1;
+        entries.push({
+          error: "The nmem-digest field exists without nmem-uri.",
           sourceWiki,
           status: "failed:sync-metadata",
           tags: sourceTags,
@@ -404,7 +431,7 @@ async function main(): Promise<void> {
       }
       seenMemoryIds.set(memory.id, memory.title);
 
-      const fingerprint = memorySyncFingerprint(memory, {
+      const digest = memorySyncDigest(memory, {
         apiUrl: options.apiUrl,
         spaceId: options.spaceId,
       });
@@ -413,7 +440,7 @@ async function main(): Promise<void> {
       const unchanged =
         hasMarker &&
         Boolean(tiddler.nmemUri) &&
-        tiddler.nmemSyncFingerprint === fingerprint;
+        tiddler.nmemDigest === digest;
       if (applying && !plannedMemoryIds.has(memory.id) && !unchanged) {
         if (planReachedLimit) {
           summary.scanned -= 1;
@@ -436,16 +463,15 @@ async function main(): Promise<void> {
         continue;
       }
 
-      const action: SyncAction =
-        !tiddler.nmemUri || !tiddler.nmemSyncFingerprint || !hasMarker
-          ? hasMarker || Boolean(tiddler.nmemUri)
-            ? "migrate"
-            : "create"
-          : "update";
+      const action = syncAction({
+        hasDigest: Boolean(tiddler.nmemDigest),
+        hasMarker,
+        hasUri: Boolean(tiddler.nmemUri),
+      });
       const candidate: MemoryCandidate = {
         ...memory,
         action,
-        fingerprint,
+        digest,
         warnings,
       };
       memories.push(candidate);
@@ -504,7 +530,7 @@ async function main(): Promise<void> {
   if (applying && nmemApiUrl) {
     process.stdout.write(`Importing ${memories.length} memories...\n`);
     const importedRecords: Array<{
-      fingerprint: string;
+      digest: string;
       title: string;
       uri: string;
     }> = [];
@@ -521,7 +547,7 @@ async function main(): Promise<void> {
         entry.status = `imported:${memory.action}`;
         summary.imported += 1;
         importedRecords.push({
-          fingerprint: memory.fingerprint,
+          digest: memory.digest,
           title: memory.title,
           uri: memoryUri(memory.id),
         });

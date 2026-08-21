@@ -32,7 +32,7 @@ interface WorkerMessage {
 }
 
 export interface TiddlerSyncRecord {
-  fingerprint: string;
+  digest: string;
   title: string;
   uri: string;
 }

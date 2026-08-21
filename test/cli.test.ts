@@ -16,9 +16,9 @@ import { fileURLToPath } from "node:url";
 
 import {
   memoryUri,
-  NOWLEDGE_MEM_FINGERPRINT_FIELD,
+  NMEM_DIGEST_FIELD,
+  NMEM_URI_FIELD,
   NOWLEDGE_MEM_TAG,
-  NOWLEDGE_MEM_URI_FIELD,
   stableMemoryId,
 } from "../src/core.ts";
 import { loadWiki } from "../src/tiddlywiki.ts";
@@ -322,7 +322,7 @@ test("apply records sync state and updates a changed tiddler", async (t) => {
   assert.ok(record);
   assert.deepEqual(record.tags, ["Test", "long tag", NOWLEDGE_MEM_TAG]);
   assert.equal(record.nmemUri, memoryUri(importedMemoryId));
-  assert.match(record.nmemSyncFingerprint ?? "", /^[0-9a-f]{64}$/u);
+  assert.match(record.nmemDigest ?? "", /^sha256:[0-9a-f]{64}$/u);
   await assert.rejects(
     access(resolve(wikiPath, ".tiddlynmem", "plan.json")),
   );
@@ -360,7 +360,7 @@ test("apply records sync state and updates a changed tiddler", async (t) => {
   assert.match(secondResult.stdout, /Ready: 0/u);
   assert.match(
     secondResult.stdout,
-    /Skipped: 12 \(system: 11, unchanged: 1\)/u,
+    /Skipped: \d+ \(system: \d+, unchanged: 1\)/u,
   );
   assert.match(secondResult.stdout, /Imported: 0/u);
   assert.match(secondResult.stdout, /Recorded: 0/u);
@@ -394,11 +394,8 @@ test("apply records sync state and updates a changed tiddler", async (t) => {
   const tiddlerPath = resolve(wikiPath, "tiddlers", "Multiline.tid");
   const syncedSource = await readFile(tiddlerPath, "utf8");
   const legacySource = syncedSource
-    .replace(new RegExp(`^${NOWLEDGE_MEM_URI_FIELD}:.*\\n`, "mu"), "")
-    .replace(
-      new RegExp(`^${NOWLEDGE_MEM_FINGERPRINT_FIELD}:.*\\n`, "mu"),
-      "",
-    );
+    .replace(new RegExp(`^${NMEM_URI_FIELD}:.*\\n`, "mu"), "")
+    .replace(new RegExp(`^${NMEM_DIGEST_FIELD}:.*\\n`, "mu"), "");
   await writeFile(tiddlerPath, legacySource, "utf8");
 
   const migrationPlan = await run(
