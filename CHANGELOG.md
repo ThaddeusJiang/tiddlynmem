@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Added one-way incremental synchronization from TiddlyWiki to Nowledge Mem. Successful upserts now write `nmem-uri` and `nmem-sync-fingerprint` fields alongside `$:/NowledgeMem`.
+- Added reviewed create, update, and legacy-marker migration actions while unchanged synced tiddlers are skipped.
+- Preserved the stored Memory ID across tiddler edits and title changes.
+
 ## [0.1.0] - 2026-08-15
 
 ### Added

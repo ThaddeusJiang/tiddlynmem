@@ -7,10 +7,10 @@ const workerFile = import.meta.url.endsWith(".ts")
   ? "./tiddlywiki-worker.ts"
   : "./tiddlywiki-worker.js";
 const workerPath = fileURLToPath(new URL(workerFile, import.meta.url));
-const tagWorkerFile = import.meta.url.endsWith(".ts")
-  ? "./tiddlywiki-tag-worker.ts"
-  : "./tiddlywiki-tag-worker.js";
-const tagWorkerPath = fileURLToPath(new URL(tagWorkerFile, import.meta.url));
+const syncWorkerFile = import.meta.url.endsWith(".ts")
+  ? "./tiddlywiki-sync-worker.ts"
+  : "./tiddlywiki-sync-worker.js";
+const syncWorkerPath = fileURLToPath(new URL(syncWorkerFile, import.meta.url));
 const WIKI_WORKER_TIMEOUT_MS = 300_000;
 
 export { NOWLEDGE_MEM_TAG } from "./core.ts";
@@ -31,9 +31,15 @@ interface WorkerMessage {
   type: "done" | "record";
 }
 
-export interface TiddlerTagResult {
+export interface TiddlerSyncRecord {
+  fingerprint: string;
+  title: string;
+  uri: string;
+}
+
+export interface TiddlerSyncResult {
   error?: string;
-  status: "added" | "already-present" | "failed";
+  status: "already-current" | "failed" | "written";
   title: string;
 }
 
@@ -45,7 +51,7 @@ export function tiddlyWikiWorkerEnvironment(
   return sanitized;
 }
 
-interface TagWorkerMessage extends Partial<TiddlerTagResult> {
+interface SyncWorkerMessage extends Partial<TiddlerSyncResult> {
   type: "done" | "ready" | "result";
 }
 
@@ -58,7 +64,7 @@ function isWorkerMessage(message: unknown): message is WorkerMessage {
   );
 }
 
-function isTagWorkerMessage(message: unknown): message is TagWorkerMessage {
+function isSyncWorkerMessage(message: unknown): message is SyncWorkerMessage {
   return (
     typeof message === "object" &&
     message !== null &&
@@ -149,21 +155,21 @@ export function loadWiki(
   });
 }
 
-export function tagWikiTiddlers(
+export function recordWikiSync(
   wikiPath: string,
-  titles: string[],
+  records: TiddlerSyncRecord[],
   tag = NOWLEDGE_MEM_TAG,
-): Promise<TiddlerTagResult[]> {
-  if (titles.length === 0) {
+): Promise<TiddlerSyncResult[]> {
+  if (records.length === 0) {
     return Promise.resolve([]);
   }
 
-  return new Promise<TiddlerTagResult[]>((resolve, reject) => {
-    const child = fork(tagWorkerPath, [wikiPath], {
+  return new Promise<TiddlerSyncResult[]>((resolve, reject) => {
+    const child = fork(syncWorkerPath, [wikiPath], {
       env: tiddlyWikiWorkerEnvironment(),
       stdio: ["ignore", "ignore", "pipe", "ipc"],
     });
-    const results: TiddlerTagResult[] = [];
+    const results: TiddlerSyncResult[] = [];
     let stderr = "";
     let completed = false;
     let settled = false;
@@ -177,34 +183,34 @@ export function tagWikiTiddlers(
       child.kill("SIGKILL");
       reject(error);
     };
-    const succeed = (tagResults: TiddlerTagResult[]): void => {
+    const succeed = (syncResults: TiddlerSyncResult[]): void => {
       if (settled) {
         return;
       }
       settled = true;
       clearTimeout(timer);
-      resolve(tagResults);
+      resolve(syncResults);
     };
     timer = setTimeout(() => {
       fail(
         new Error(
-          `TiddlyWiki tag worker timed out after ${WIKI_WORKER_TIMEOUT_MS}ms.`,
+          `TiddlyWiki sync worker timed out after ${WIKI_WORKER_TIMEOUT_MS}ms.`,
         ),
       );
     }, WIKI_WORKER_TIMEOUT_MS);
 
     child.on("message", (message) => {
-      if (!isTagWorkerMessage(message)) {
+      if (!isSyncWorkerMessage(message)) {
         return;
       }
       if (message.type === "ready") {
-        child.send({ tag, titles, type: "tag" });
+        child.send({ records, tag, type: "sync" });
       } else if (
         message.type === "result" &&
         typeof message.title === "string" &&
-        (message.status === "added" ||
-          message.status === "already-present" ||
-          message.status === "failed")
+        (message.status === "already-current" ||
+          message.status === "failed" ||
+          message.status === "written")
       ) {
         results.push({
           ...(typeof message.error === "string"
@@ -218,7 +224,7 @@ export function tagWikiTiddlers(
       }
     });
     if (!child.stderr) {
-      fail(new Error("The TiddlyWiki tag worker stderr pipe is unavailable."));
+      fail(new Error("The TiddlyWiki sync worker stderr pipe is unavailable."));
       return;
     }
     child.stderr.setEncoding("utf8");
@@ -227,12 +233,12 @@ export function tagWikiTiddlers(
     });
     child.on("error", (error) => fail(error));
     child.on("close", (code) => {
-      if (code === 0 && completed && results.length === titles.length) {
+      if (code === 0 && completed && results.length === records.length) {
         succeed(results);
       } else {
         fail(
           new Error(
-            `TiddlyWiki tag worker exited before completion with code ${code}: ${stderr.trim()}`,
+            `TiddlyWiki sync worker exited before completion with code ${code}: ${stderr.trim()}`,
           ),
         );
       }

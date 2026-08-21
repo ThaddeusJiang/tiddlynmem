@@ -1,6 +1,11 @@
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 
+import {
+  NOWLEDGE_MEM_FINGERPRINT_FIELD,
+  NOWLEDGE_MEM_URI_FIELD,
+} from "./core.ts";
+
 interface TiddlerFileInfo {
   filepath: string;
   hasMetaFile: boolean;
@@ -9,6 +14,7 @@ interface TiddlerFileInfo {
 
 interface TiddlyWikiTiddler {
   fields: {
+    [key: string]: unknown;
     tags?: string[];
     title: string;
   };
@@ -31,15 +37,20 @@ interface TiddlyWikiRuntime {
     ): void;
   };
   wiki: {
-    getModificationFields(): Record<string, unknown>;
     getTiddler(title: string): TiddlyWikiTiddler | undefined;
   };
 }
 
-interface TagRequest {
+interface SyncRecord {
+  fingerprint: string;
+  title: string;
+  uri: string;
+}
+
+interface SyncRequest {
+  records: SyncRecord[];
   tag: string;
-  titles: string[];
-  type: "tag";
+  type: "sync";
 }
 
 const require = createRequire(import.meta.url);
@@ -53,20 +64,35 @@ if (!wikiPath) {
 }
 
 if (!process.send) {
-  throw new Error("The TiddlyWiki tag worker requires a Node IPC channel.");
+  throw new Error("The TiddlyWiki sync worker requires a Node IPC channel.");
 }
 
-function isTagRequest(message: unknown): message is TagRequest {
+function isSyncRecord(value: unknown): value is SyncRecord {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "fingerprint" in value &&
+    typeof value.fingerprint === "string" &&
+    value.fingerprint.length > 0 &&
+    "title" in value &&
+    typeof value.title === "string" &&
+    "uri" in value &&
+    typeof value.uri === "string" &&
+    value.uri.length > 0
+  );
+}
+
+function isSyncRequest(message: unknown): message is SyncRequest {
   return (
     typeof message === "object" &&
     message !== null &&
     "type" in message &&
-    message.type === "tag" &&
+    message.type === "sync" &&
     "tag" in message &&
     typeof message.tag === "string" &&
-    "titles" in message &&
-    Array.isArray(message.titles) &&
-    message.titles.every((title) => typeof title === "string")
+    "records" in message &&
+    Array.isArray(message.records) &&
+    message.records.every(isSyncRecord)
   );
 }
 
@@ -98,11 +124,12 @@ function send(message: unknown): Promise<void> {
   });
 }
 
-async function tagTiddlers(
+async function recordSyncState(
   tw: TiddlyWikiRuntime,
-  request: TagRequest,
+  request: SyncRequest,
 ): Promise<void> {
-  for (const title of request.titles) {
+  for (const record of request.records) {
+    const { fingerprint, title, uri } = record;
     try {
       const tiddler = tw.wiki.getTiddler(title);
       if (!tiddler) {
@@ -112,8 +139,12 @@ async function tagTiddlers(
       const tags = Array.isArray(tiddler.fields.tags)
         ? tiddler.fields.tags
         : [];
-      if (tags.includes(request.tag)) {
-        await send({ status: "already-present", title, type: "result" });
+      if (
+        tags.includes(request.tag) &&
+        tiddler.fields[NOWLEDGE_MEM_URI_FIELD] === uri &&
+        tiddler.fields[NOWLEDGE_MEM_FINGERPRINT_FIELD] === fingerprint
+      ) {
+        await send({ status: "already-current", title, type: "result" });
         continue;
       }
 
@@ -130,13 +161,13 @@ async function tagTiddlers(
         );
       }
 
-      const updated = new tw.Tiddler(
-        tiddler,
-        { tags: [...tags, request.tag] },
-        tw.wiki.getModificationFields(),
-      );
+      const updated = new tw.Tiddler(tiddler, {
+        [NOWLEDGE_MEM_FINGERPRINT_FIELD]: fingerprint,
+        [NOWLEDGE_MEM_URI_FIELD]: uri,
+        tags: tags.includes(request.tag) ? tags : [...tags, request.tag],
+      });
       await saveTiddler(tw, updated, fileInfo);
-      await send({ status: "added", title, type: "result" });
+      await send({ status: "written", title, type: "result" });
     } catch (error) {
       await send({
         error: error instanceof Error ? error.message : String(error),
@@ -155,13 +186,13 @@ const tw = TiddlyWiki();
 tw.boot.argv = [wikiPath, "--output", tmpdir()];
 tw.boot.boot(() => {
   process.once("message", (message) => {
-    if (!isTagRequest(message)) {
-      process.stderr.write("The TiddlyWiki tag request is invalid.\n");
+    if (!isSyncRequest(message)) {
+      process.stderr.write("The TiddlyWiki sync request is invalid.\n");
       process.exit(1);
       return;
     }
 
-    void tagTiddlers(tw, message).catch((error) => {
+    void recordSyncState(tw, message).catch((error) => {
       process.stderr.write(
         `${error instanceof Error ? error.message : String(error)}\n`,
       );

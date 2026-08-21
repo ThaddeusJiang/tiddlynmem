@@ -6,10 +6,14 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 import {
+  NOWLEDGE_MEM_FINGERPRINT_FIELD,
   NOWLEDGE_MEM_TAG,
+  NOWLEDGE_MEM_URI_FIELD,
+} from "../src/core.ts";
+import {
   loadWiki,
+  recordWikiSync,
   tiddlyWikiWorkerEnvironment,
-  tagWikiTiddlers,
 } from "../src/tiddlywiki.ts";
 
 const fixture = resolve(
@@ -50,7 +54,7 @@ test("loadWiki filters by tag before returning records", async () => {
   assert.deepEqual(missing.records, []);
 });
 
-test("loadWiki renders only tiddlers that can be imported", async (t) => {
+test("loadWiki renders only tiddlers eligible for synchronization", async (t) => {
   const temporaryRoot = await mkdtemp(resolve(tmpdir(), "tiddlynmem-test-"));
   const wikiPath = resolve(temporaryRoot, "wiki");
   await cp(fixture, wikiPath, { recursive: true });
@@ -87,7 +91,7 @@ test("loadWiki renders only tiddlers that can be imported", async (t) => {
   assert.ok(imported);
   assert.ok(sensitive);
   assert.equal(draft.html, undefined);
-  assert.equal(imported.html, undefined);
+  assert.ok(imported.html);
   assert.equal(sensitive.html, undefined);
 
   const includedLoad = await loadWiki(wikiPath, { includeSensitive: true });
@@ -97,7 +101,7 @@ test("loadWiki renders only tiddlers that can be imported", async (t) => {
   assert.ok(includedSensitive?.html);
 });
 
-test("tagWikiTiddlers appends the Nowledge Mem tag exactly once", async (t) => {
+test("recordWikiSync writes sync metadata exactly once", async (t) => {
   const temporaryRoot = await mkdtemp(resolve(tmpdir(), "tiddlynmem-test-"));
   const wikiPath = resolve(temporaryRoot, "wiki");
   await cp(fixture, wikiPath, { recursive: true });
@@ -109,8 +113,13 @@ test("tagWikiTiddlers appends the Nowledge Mem tag exactly once", async (t) => {
   const beforeRecord = before.records.find((item) => item.title === "Multiline");
   assert.ok(beforeRecord);
 
-  const firstResult = await tagWikiTiddlers(wikiPath, ["Multiline"]);
-  assert.deepEqual(firstResult, [{ status: "added", title: "Multiline" }]);
+  const syncRecord = {
+    fingerprint: "a".repeat(64),
+    title: "Multiline",
+    uri: "nowledgemem://memory/12345678-1234-5123-8123-123456789abc",
+  };
+  const firstResult = await recordWikiSync(wikiPath, [syncRecord]);
+  assert.deepEqual(firstResult, [{ status: "written", title: "Multiline" }]);
 
   const afterFirstWrite = await loadWiki(wikiPath);
   const taggedRecord = afterFirstWrite.records.find(
@@ -118,11 +127,14 @@ test("tagWikiTiddlers appends the Nowledge Mem tag exactly once", async (t) => {
   );
   assert.ok(taggedRecord);
   assert.equal(taggedRecord.text, beforeRecord.text);
+  assert.equal(taggedRecord.modified, beforeRecord.modified);
+  assert.equal(taggedRecord.nmemUri, syncRecord.uri);
+  assert.equal(taggedRecord.nmemSyncFingerprint, syncRecord.fingerprint);
   assert.deepEqual(taggedRecord.tags, ["Test", "long tag", NOWLEDGE_MEM_TAG]);
 
-  const secondResult = await tagWikiTiddlers(wikiPath, ["Multiline"]);
+  const secondResult = await recordWikiSync(wikiPath, [syncRecord]);
   assert.deepEqual(secondResult, [
-    { status: "already-present", title: "Multiline" },
+    { status: "already-current", title: "Multiline" },
   ]);
 
   const afterSecondWrite = await loadWiki(wikiPath);
@@ -138,8 +150,14 @@ test("tagWikiTiddlers appends the Nowledge Mem tag exactly once", async (t) => {
   );
 });
 
-test("tagWikiTiddlers reports a missing source tiddler without writing", async () => {
-  const result = await tagWikiTiddlers(fixture, ["Missing"]);
+test("recordWikiSync reports a missing source tiddler without writing", async () => {
+  const result = await recordWikiSync(fixture, [
+    {
+      fingerprint: "a".repeat(64),
+      title: "Missing",
+      uri: "nowledgemem://memory/12345678-1234-5123-8123-123456789abc",
+    },
+  ]);
 
   assert.deepEqual(result, [
     {
@@ -150,7 +168,7 @@ test("tagWikiTiddlers reports a missing source tiddler without writing", async (
   ]);
 });
 
-test("tagWikiTiddlers does not rewrite an unsupported source file", async (t) => {
+test("recordWikiSync does not rewrite an unsupported source file", async (t) => {
   const temporaryRoot = await mkdtemp(resolve(tmpdir(), "tiddlynmem-test-"));
   const wikiPath = resolve(temporaryRoot, "wiki");
   const jsonPath = resolve(wikiPath, "tiddlers", "Shared.json");
@@ -168,7 +186,13 @@ test("tagWikiTiddlers does not rewrite an unsupported source file", async (t) =>
     await rm(temporaryRoot, { force: true, recursive: true });
   });
 
-  const result = await tagWikiTiddlers(wikiPath, ["First"]);
+  const result = await recordWikiSync(wikiPath, [
+    {
+      fingerprint: "a".repeat(64),
+      title: "First",
+      uri: "nowledgemem://memory/12345678-1234-5123-8123-123456789abc",
+    },
+  ]);
 
   assert.deepEqual(result, [
     {
@@ -180,7 +204,7 @@ test("tagWikiTiddlers does not rewrite an unsupported source file", async (t) =>
   assert.equal(await readFile(jsonPath, "utf8"), json);
 });
 
-test("tagWikiTiddlers preserves a Markdown file with a metadata sidecar", async (t) => {
+test("recordWikiSync preserves a Markdown file with a metadata sidecar", async (t) => {
   const temporaryRoot = await mkdtemp(resolve(tmpdir(), "tiddlynmem-test-"));
   const wikiPath = resolve(temporaryRoot, "wiki");
   const markdownPath = resolve(wikiPath, "tiddlers", "Markdown.md");
@@ -197,12 +221,25 @@ test("tagWikiTiddlers preserves a Markdown file with a metadata sidecar", async 
     await rm(temporaryRoot, { force: true, recursive: true });
   });
 
-  const result = await tagWikiTiddlers(wikiPath, ["Markdown"]);
+  const syncRecord = {
+    fingerprint: "b".repeat(64),
+    title: "Markdown",
+    uri: "nowledgemem://memory/12345678-1234-5123-8123-123456789abc",
+  };
+  const result = await recordWikiSync(wikiPath, [syncRecord]);
 
-  assert.deepEqual(result, [{ status: "added", title: "Markdown" }]);
+  assert.deepEqual(result, [{ status: "written", title: "Markdown" }]);
   assert.equal(await readFile(markdownPath, "utf8"), markdown);
   const after = await loadWiki(wikiPath, { tag: NOWLEDGE_MEM_TAG });
   const record = after.records.find((item) => item.title === "Markdown");
   assert.ok(record);
+  assert.equal(record.nmemUri, syncRecord.uri);
+  assert.equal(record.nmemSyncFingerprint, syncRecord.fingerprint);
   assert.deepEqual(record.tags, ["Original", NOWLEDGE_MEM_TAG]);
+  const metadata = await readFile(metadataPath, "utf8");
+  assert.match(metadata, new RegExp(`^${NOWLEDGE_MEM_URI_FIELD}: `, "mu"));
+  assert.match(
+    metadata,
+    new RegExp(`^${NOWLEDGE_MEM_FINGERPRINT_FIELD}: `, "mu"),
+  );
 });

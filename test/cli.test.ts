@@ -14,8 +14,14 @@ import { resolve } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { stableMemoryId } from "../src/core.ts";
-import { NOWLEDGE_MEM_TAG, loadWiki } from "../src/tiddlywiki.ts";
+import {
+  memoryUri,
+  NOWLEDGE_MEM_FINGERPRINT_FIELD,
+  NOWLEDGE_MEM_TAG,
+  NOWLEDGE_MEM_URI_FIELD,
+  stableMemoryId,
+} from "../src/core.ts";
+import { loadWiki } from "../src/tiddlywiki.ts";
 
 interface CommandResult {
   code: number | null;
@@ -68,7 +74,7 @@ test("help omits removed compatibility and file-output options", async () => {
   );
 });
 
-test("apply tags a tiddler after its Memory import succeeds", async (t) => {
+test("apply records sync state and updates a changed tiddler", async (t) => {
   const temporaryRoot = await mkdtemp(resolve(tmpdir(), "tiddlynmem-cli-test-"));
   const wikiPath = resolve(temporaryRoot, "wiki");
   const fixture = fileURLToPath(new URL("./fixtures/wiki", import.meta.url));
@@ -139,7 +145,7 @@ test("apply tags a tiddler after its Memory import succeeds", async (t) => {
   assert.equal(tagResult.code, 0, tagResult.stderr);
   assert.match(tagResult.stdout, /Scanned: 1/u);
   assert.match(tagResult.stdout, /Ready: 1/u);
-  assert.match(tagResult.stdout, /\[ready\] Multiline/u);
+  assert.match(tagResult.stdout, /\[ready:create\] Multiline/u);
   assert.match(tagResult.stdout, /Source: wiki/u);
   assert.match(tagResult.stdout, /Tags: Test, long tag/u);
   assert.match(tagResult.stdout, /Saved plan: \.tiddlynmem\/plan\.json/u);
@@ -280,10 +286,10 @@ test("apply tags a tiddler after its Memory import succeeds", async (t) => {
 
   assert.equal(result.code, 0, result.stderr);
   assert.match(result.stdout, /Imported: 1/u);
-  assert.match(result.stdout, /Tagged: 1/u);
-  assert.match(result.stdout, /\[imported\] Multiline/u);
+  assert.match(result.stdout, /Recorded: 1/u);
+  assert.match(result.stdout, /\[imported:create\] Multiline/u);
   assert.match(result.stdout, /Tags: Test, long tag/u);
-  assert.match(result.stdout, /Source tag: added/u);
+  assert.match(result.stdout, /Source sync: written/u);
   assert.equal(memoryRequests.length, 3);
   assert.deepEqual(memoryRequests[2], {
     content: [
@@ -312,8 +318,11 @@ test("apply tags a tiddler after its Memory import succeeds", async (t) => {
 
   const { records } = await loadWiki(wikiPath);
   const record = records.find((item) => item.title === "Multiline");
+  const importedMemoryId = stableMemoryId("fixture-wiki", "Multiline");
   assert.ok(record);
   assert.deepEqual(record.tags, ["Test", "long tag", NOWLEDGE_MEM_TAG]);
+  assert.equal(record.nmemUri, memoryUri(importedMemoryId));
+  assert.match(record.nmemSyncFingerprint ?? "", /^[0-9a-f]{64}$/u);
   await assert.rejects(
     access(resolve(wikiPath, ".tiddlynmem", "plan.json")),
   );
@@ -351,16 +360,207 @@ test("apply tags a tiddler after its Memory import succeeds", async (t) => {
   assert.match(secondResult.stdout, /Ready: 0/u);
   assert.match(
     secondResult.stdout,
-    /Skipped: 12 \(imported: 1, system: 11\)/u,
+    /Skipped: 12 \(system: 11, unchanged: 1\)/u,
   );
   assert.match(secondResult.stdout, /Imported: 0/u);
-  assert.match(secondResult.stdout, /Tagged: 0/u);
+  assert.match(secondResult.stdout, /Recorded: 0/u);
   assert.equal(memoryRequests.length, 3);
   assert.equal(healthRequests, 4);
-  assert.match(secondResult.stdout, /\[skipped:imported\] Multiline/u);
+  assert.match(secondResult.stdout, /\[skipped:unchanged\] Multiline/u);
   assert.match(
     secondResult.stdout,
     /Tags: Test, long tag, \$:\/NowledgeMem/u,
+  );
+
+  const destinationPlan = await run(
+    "nub",
+    [
+      cliPath,
+      "plan",
+      "--api-url",
+      apiUrl,
+      "--space-id",
+      "other-space",
+      "--tag",
+      "long tag",
+      "--wiki-id",
+      "fixture-wiki",
+    ],
+    { cwd: wikiPath, env: process.env },
+  );
+  assert.equal(destinationPlan.code, 0, destinationPlan.stderr);
+  assert.match(destinationPlan.stdout, /\[ready:update\] Multiline/u);
+
+  const tiddlerPath = resolve(wikiPath, "tiddlers", "Multiline.tid");
+  const syncedSource = await readFile(tiddlerPath, "utf8");
+  const legacySource = syncedSource
+    .replace(new RegExp(`^${NOWLEDGE_MEM_URI_FIELD}:.*\\n`, "mu"), "")
+    .replace(
+      new RegExp(`^${NOWLEDGE_MEM_FINGERPRINT_FIELD}:.*\\n`, "mu"),
+      "",
+    );
+  await writeFile(tiddlerPath, legacySource, "utf8");
+
+  const migrationPlan = await run(
+    "nub",
+    [
+      cliPath,
+      "plan",
+      "--api-url",
+      apiUrl,
+      "--tag",
+      "long tag",
+      "--wiki-id",
+      "fixture-wiki",
+    ],
+    { cwd: wikiPath, env: process.env },
+  );
+  assert.equal(migrationPlan.code, 0, migrationPlan.stderr);
+  assert.match(migrationPlan.stdout, /\[ready:migrate\] Multiline/u);
+
+  const migrationApply = await run("nub", [cliPath, "apply"], {
+    cwd: wikiPath,
+    env: process.env,
+  });
+  assert.equal(migrationApply.code, 0, migrationApply.stderr);
+  assert.match(migrationApply.stdout, /\[imported:migrate\] Multiline/u);
+  assert.equal(memoryRequests.length, 4);
+  assert.equal(memoryRequests[3]?.id, importedMemoryId);
+
+  const migratedSource = await readFile(tiddlerPath, "utf8");
+  await writeFile(
+    tiddlerPath,
+    migratedSource
+      .replace("title: Multiline", "title: Renamed")
+      .replace("First line.", "Updated line."),
+    "utf8",
+  );
+  const updatePlan = await run(
+    "nub",
+    [
+      cliPath,
+      "plan",
+      "--api-url",
+      apiUrl,
+      "--tag",
+      "long tag",
+      "--wiki-id",
+      "fixture-wiki",
+    ],
+    { cwd: wikiPath, env: process.env },
+  );
+  assert.equal(updatePlan.code, 0, updatePlan.stderr);
+  assert.match(updatePlan.stdout, /\[ready:update\] Renamed/u);
+
+  const updateApply = await run("nub", [cliPath, "apply"], {
+    cwd: wikiPath,
+    env: process.env,
+  });
+  assert.equal(updateApply.code, 0, updateApply.stderr);
+  assert.match(updateApply.stdout, /\[imported:update\] Renamed/u);
+  assert.equal(memoryRequests.length, 5);
+  assert.equal(memoryRequests[4]?.id, importedMemoryId);
+  assert.equal(memoryRequests[4]?.title, "Renamed");
+  assert.match(String(memoryRequests[4]?.content), /^Updated line\./u);
+  const updatedWiki = await loadWiki(wikiPath, { tag: "long tag" });
+  const updatedRecord = updatedWiki.records.find(
+    (item) => item.title === "Renamed",
+  );
+  assert.ok(updatedRecord);
+  assert.equal(updatedRecord.nmemUri, memoryUri(importedMemoryId));
+});
+
+test("apply retries only pending Memories after a partial success", async (t) => {
+  const temporaryRoot = await mkdtemp(resolve(tmpdir(), "tiddlynmem-cli-test-"));
+  const wikiPath = resolve(temporaryRoot, "wiki");
+  const fixture = fileURLToPath(new URL("./fixtures/wiki", import.meta.url));
+  const cliPath = fileURLToPath(new URL("../src/cli.ts", import.meta.url));
+  const requestedTitles: string[] = [];
+  let failSecond = true;
+  const server = createServer(async (request, response) => {
+    if (request.method === "GET" && request.url === "/health") {
+      response.writeHead(200, { "Content-Type": "application/json" });
+      response.end('{"services_ready":true,"status":"ok"}');
+      return;
+    }
+    request.setEncoding("utf8");
+    let body = "";
+    for await (const chunk of request) {
+      body += chunk;
+    }
+    const memoryRequest = JSON.parse(body) as { id: string; title: string };
+    requestedTitles.push(memoryRequest.title);
+    if (failSecond && memoryRequest.title === "Second") {
+      response.writeHead(503, { "Content-Type": "application/json" });
+      response.end('{"detail":"retry"}');
+      return;
+    }
+    response.writeHead(200, { "Content-Type": "application/json" });
+    response.end(
+      JSON.stringify({ memory: { id: memoryRequest.id } }),
+    );
+  });
+  await new Promise<void>((resolveListen, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolveListen);
+  });
+  const serverAddress = server.address();
+  assert.ok(serverAddress && typeof serverAddress !== "string");
+  const apiUrl = `http://127.0.0.1:${serverAddress.port}`;
+  await cp(fixture, wikiPath, { recursive: true });
+  await Promise.all(
+    ["First", "Second"].map((title) =>
+      writeFile(
+        resolve(wikiPath, "tiddlers", `${title}.tid`),
+        `title: ${title}\ntags: Batch\ntype: text/plain\n\n${title} body.\n`,
+        "utf8",
+      ),
+    ),
+  );
+  t.after(async () => {
+    await new Promise<void>((resolveClose, reject) => {
+      server.close((error) => (error ? reject(error) : resolveClose()));
+    });
+    await rm(temporaryRoot, { force: true, recursive: true });
+  });
+
+  const planResult = await run(
+    "nub",
+    [cliPath, "plan", "--api-url", apiUrl, "--jobs", "1", "--tag", "Batch"],
+    { cwd: wikiPath, env: process.env },
+  );
+  assert.equal(planResult.code, 0, planResult.stderr);
+  assert.match(planResult.stdout, /Ready: 2/u);
+
+  const firstApply = await run("nub", [cliPath, "apply"], {
+    cwd: wikiPath,
+    env: process.env,
+  });
+  assert.equal(firstApply.code, 1);
+  assert.match(firstApply.stdout, /\[imported:create\] First/u);
+  assert.match(firstApply.stdout, /\[failed:import\] Second/u);
+  await access(resolve(wikiPath, ".tiddlynmem", "plan.json"));
+  const afterPartial = await loadWiki(wikiPath, { tag: "Batch" });
+  assert.ok(
+    afterPartial.records.find((record) => record.title === "First")?.nmemUri,
+  );
+  assert.equal(
+    afterPartial.records.find((record) => record.title === "Second")?.nmemUri,
+    "",
+  );
+
+  const requestsBeforeRetry = requestedTitles.length;
+  failSecond = false;
+  const secondApply = await run("nub", [cliPath, "apply"], {
+    cwd: wikiPath,
+    env: process.env,
+  });
+  assert.equal(secondApply.code, 0, secondApply.stderr);
+  assert.match(secondApply.stdout, /\[skipped:unchanged\] First/u);
+  assert.match(secondApply.stdout, /\[imported:create\] Second/u);
+  assert.deepEqual(requestedTitles.slice(requestsBeforeRetry), ["Second"]);
+  await assert.rejects(
+    access(resolve(wikiPath, ".tiddlynmem", "plan.json")),
   );
 });
 
@@ -430,7 +630,7 @@ test("plan reports sanitized media and native API limits without bodies", async 
   );
 
   assert.equal(result.code, 1);
-  assert.match(result.stdout, /\[ready\] Markdown media/u);
+  assert.match(result.stdout, /\[ready:create\] Markdown media/u);
   assert.match(
     result.stdout,
     /Warnings: local:local image\.png; embedded:image\/png/u,
@@ -477,7 +677,7 @@ test("plan escapes terminal control characters", async (t) => {
   assert.equal(result.code, 0, result.stderr);
   assert.doesNotMatch(result.stdout, /\u001b|\u0007/u);
   assert.match(result.stdout, /Loading wiki\\n\\u001b\[31m\.\.\./u);
-  assert.match(result.stdout, /\[ready\] Unsafe\\u001b\[31m title/u);
+  assert.match(result.stdout, /\[ready:create\] Unsafe\\u001b\[31m title/u);
   assert.match(result.stdout, /Tags: Control\\u0007Tag/u);
   assert.match(result.stdout, /Source: wiki\\n\\u001b\[31m/u);
   assert.match(result.stdout, /Skipped: 0/u);

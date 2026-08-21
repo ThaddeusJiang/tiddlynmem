@@ -10,6 +10,9 @@ import {
   classifyTiddler,
   findMediaReferences,
   htmlToMarkdown,
+  memoryIdFromUri,
+  memoryUri,
+  NOWLEDGE_MEM_TAG,
   parseTagString,
   resolveWikiId,
   sanitizeMarkdownMedia,
@@ -29,22 +32,22 @@ import {
   assertSavedPlanMatches,
   discardSavedPlan,
   loadSavedPlan,
+  memorySyncFingerprint,
   optionsFromSavedPlan,
   savePlan,
   SAVED_PLAN_RELATIVE_PATH,
   type SavedPlan,
 } from "./plan.ts";
-import {
-  NOWLEDGE_MEM_TAG,
-  loadWiki,
-  tagWikiTiddlers,
-} from "./tiddlywiki.ts";
+import { loadWiki, recordWikiSync } from "./tiddlywiki.ts";
 
-type SkipReason = Exclude<TiddlerClassification, "ready">;
+type SkipReason = Exclude<TiddlerClassification, "ready"> | "unchanged";
+type SyncAction = "create" | "migrate" | "update";
 const require = createRequire(import.meta.url);
 const packageVersion = (require("../package.json") as { version: string }).version;
 
 interface MemoryCandidate extends MemoryInput {
+  action: SyncAction;
+  fingerprint: string;
   warnings: string[];
 }
 
@@ -52,7 +55,7 @@ interface ResultEntry {
   error?: string;
   id?: string;
   sourceWiki: string;
-  sourceTag?: "added" | "already-present" | "failed";
+  sourceSync?: "already-current" | "failed" | "written";
   status: string;
   tags: string[];
   title: string;
@@ -65,7 +68,7 @@ interface ImportSummary {
   ready: number;
   scanned: number;
   skipped: Record<SkipReason, number>;
-  tagged: number;
+  recorded: number;
   warnings: number;
 }
 
@@ -76,14 +79,14 @@ const help = `Usage: tiddlynmem plan [options]
 
 Run this command from a TiddlyWiki root directory. It converts that Wiki's
 tiddlers to Markdown and imports them into Nowledge Mem. The default command
-is plan. Tiddlers tagged $:/NowledgeMem are skipped.
+is plan. Synced tiddlers are updated when their content or mapped metadata changes.
 
 Commands:
   plan                    Preview and save an execution plan. Default.
   apply                   Apply the saved plan with no additional options.
 
 Plan options:
-  --limit <count>         Stop after this many ready tiddlers.
+  --limit <count>         Stop after this many create, migrate, or update actions.
   --jobs <count>          Set concurrent Memory API writes. Default: 4.
   --space-id <id>         Set the Nowledge Mem space. Default: default.
   --tag <tag>             Only process tiddlers with this exact tag.
@@ -120,9 +123,10 @@ function newSummary(): ImportSummary {
       imported: 0,
       sensitive: 0,
       system: 0,
+      unchanged: 0,
       unsupported_type: 0,
     },
-    tagged: 0,
+    recorded: 0,
     warnings: 0,
   };
 }
@@ -194,8 +198,8 @@ function formatResultEntries(entries: ResultEntry[]): string {
     if (entry.id) {
       lines.push(`  ID: ${sanitizeTerminalText(entry.id)}`);
     }
-    if (entry.sourceTag) {
-      lines.push(`  Source tag: ${sanitizeTerminalText(entry.sourceTag)}`);
+    if (entry.sourceSync) {
+      lines.push(`  Source sync: ${sanitizeTerminalText(entry.sourceSync)}`);
     }
     if (entry.warnings && entry.warnings.length > 0) {
       lines.push(
@@ -241,10 +245,20 @@ async function main(): Promise<void> {
   const entries: ResultEntry[] = [];
   const summary = newSummary();
   const memories: MemoryCandidate[] = [];
+  const scannedMemories: MemoryInput[] = [];
   const entriesById = new Map<string, ResultEntry>();
+  const plannedMemoryIds = new Set(
+    savedPlan?.memories.map((memory) => memory.id) ?? [],
+  );
+  const planReachedLimit =
+    applying &&
+    Number.isFinite(options.limit) &&
+    plannedMemoryIds.size === options.limit;
+  const seenMemoryIds = new Map<string, string>();
+  let hasUnplannedAction = false;
 
   for (const wikiPath of wikiPaths) {
-    if (memories.length >= options.limit) {
+    if (!applying && memories.length >= options.limit) {
       break;
     }
     const sourceWiki = basename(wikiPath);
@@ -260,15 +274,16 @@ async function main(): Promise<void> {
     }
 
     for (const tiddler of records) {
-      if (memories.length >= options.limit) {
+      if (!applying && memories.length >= options.limit) {
         break;
       }
-      const tags = parseTagString(tiddler.tags);
-      if (options.tag && !tags.includes(options.tag)) {
+      const sourceTags = parseTagString(tiddler.tags);
+      if (options.tag && !sourceTags.includes(options.tag)) {
         continue;
       }
       summary.scanned += 1;
       const classification = classifyTiddler(tiddler, {
+        includeImported: true,
         includeSensitive: options.includeSensitive,
       });
       if (classification !== "ready") {
@@ -276,7 +291,7 @@ async function main(): Promise<void> {
         entries.push({
           sourceWiki,
           status: `skipped:${classification}`,
-          tags,
+          tags: sourceTags,
           title: tiddler.title,
         });
         continue;
@@ -287,7 +302,7 @@ async function main(): Promise<void> {
           error: tiddler.renderError,
           sourceWiki,
           status: "failed:render",
-          tags,
+          tags: sourceTags,
           title: tiddler.title,
         });
         continue;
@@ -308,7 +323,7 @@ async function main(): Promise<void> {
           error: "The converted Markdown is empty.",
           sourceWiki,
           status: "failed:conversion",
-          tags,
+          tags: sourceTags,
           title: tiddler.title,
         });
         continue;
@@ -321,15 +336,42 @@ async function main(): Promise<void> {
         ]),
       ];
       summary.warnings += warnings.length;
-      const memory = {
+      const storedMemoryId = tiddler.nmemUri
+        ? memoryIdFromUri(tiddler.nmemUri)
+        : undefined;
+      if (tiddler.nmemUri && !storedMemoryId) {
+        summary.failed += 1;
+        entries.push({
+          error: `Invalid nmem-uri field: ${tiddler.nmemUri}`,
+          sourceWiki,
+          status: "failed:sync-metadata",
+          tags: sourceTags,
+          title: tiddler.title,
+          warnings,
+        });
+        continue;
+      }
+      if (!tiddler.nmemUri && tiddler.nmemSyncFingerprint) {
+        summary.failed += 1;
+        entries.push({
+          error: "The nmem-sync-fingerprint field exists without nmem-uri.",
+          sourceWiki,
+          status: "failed:sync-metadata",
+          tags: sourceTags,
+          title: tiddler.title,
+          warnings,
+        });
+        continue;
+      }
+
+      const memory: MemoryInput = {
         content: buildMemoryContent(body),
         created: toIsoTimestamp(tiddler.created),
-        id: stableMemoryId(wikiId, tiddler.title),
+        id: storedMemoryId ?? stableMemoryId(wikiId, tiddler.title),
         modified: toIsoTimestamp(tiddler.modified),
         sourceWiki,
-        tags,
+        tags: sourceTags.filter((tag) => tag !== NOWLEDGE_MEM_TAG),
         title: tiddler.title,
-        warnings,
         wikiId,
       };
       const validationErrors = validateMemoryInput(memory);
@@ -340,19 +382,79 @@ async function main(): Promise<void> {
           id: memory.id,
           sourceWiki,
           status: "failed:validation",
-          tags,
+          tags: sourceTags,
           title: memory.title,
           warnings,
         });
         continue;
       }
-      memories.push(memory);
+      const previousTitle = seenMemoryIds.get(memory.id);
+      if (previousTitle) {
+        summary.failed += 1;
+        entries.push({
+          error: `Memory ID is already linked to tiddler ${previousTitle}.`,
+          id: memory.id,
+          sourceWiki,
+          status: "failed:sync-metadata",
+          tags: sourceTags,
+          title: memory.title,
+          warnings,
+        });
+        continue;
+      }
+      seenMemoryIds.set(memory.id, memory.title);
+
+      const fingerprint = memorySyncFingerprint(memory, {
+        apiUrl: options.apiUrl,
+        spaceId: options.spaceId,
+      });
+      scannedMemories.push(memory);
+      const hasMarker = sourceTags.includes(NOWLEDGE_MEM_TAG);
+      const unchanged =
+        hasMarker &&
+        Boolean(tiddler.nmemUri) &&
+        tiddler.nmemSyncFingerprint === fingerprint;
+      if (applying && !plannedMemoryIds.has(memory.id) && !unchanged) {
+        if (planReachedLimit) {
+          summary.scanned -= 1;
+          summary.warnings -= warnings.length;
+        } else {
+          hasUnplannedAction = true;
+        }
+        continue;
+      }
+      if (unchanged) {
+        summary.skipped.unchanged += 1;
+        entries.push({
+          id: memory.id,
+          sourceWiki,
+          status: "skipped:unchanged",
+          tags: sourceTags,
+          title: memory.title,
+          warnings,
+        });
+        continue;
+      }
+
+      const action: SyncAction =
+        !tiddler.nmemUri || !tiddler.nmemSyncFingerprint || !hasMarker
+          ? hasMarker || Boolean(tiddler.nmemUri)
+            ? "migrate"
+            : "create"
+          : "update";
+      const candidate: MemoryCandidate = {
+        ...memory,
+        action,
+        fingerprint,
+        warnings,
+      };
+      memories.push(candidate);
       summary.ready += 1;
       const entry: ResultEntry = {
         id: memory.id,
         sourceWiki,
-        status: "ready",
-        tags,
+        status: `ready:${action}`,
+        tags: sourceTags,
         title: memory.title,
         warnings,
       };
@@ -362,12 +464,12 @@ async function main(): Promise<void> {
   }
 
   if (applying) {
-    if (summary.failed > 0) {
+    if (summary.failed > 0 || hasUnplannedAction) {
       throw new Error(
         'The TiddlyWiki changed after planning. Run "tiddlynmem plan" again before applying.',
       );
     }
-    assertSavedPlanMatches(savedPlan!, memories);
+    assertSavedPlanMatches(savedPlan!, scannedMemories);
   } else if (summary.failed === 0) {
     await savePlan({
       memories,
@@ -401,7 +503,11 @@ async function main(): Promise<void> {
 
   if (applying && nmemApiUrl) {
     process.stdout.write(`Importing ${memories.length} memories...\n`);
-    const importedTitles: string[] = [];
+    const importedRecords: Array<{
+      fingerprint: string;
+      title: string;
+      uri: string;
+    }> = [];
     await runPool(memories, options.jobs, async (memory) => {
       const entry = entriesById.get(memory.id);
       if (!entry) {
@@ -412,9 +518,13 @@ async function main(): Promise<void> {
           apiUrl: nmemApiUrl,
           spaceId: options.spaceId,
         });
-        entry.status = "imported";
+        entry.status = `imported:${memory.action}`;
         summary.imported += 1;
-        importedTitles.push(memory.title);
+        importedRecords.push({
+          fingerprint: memory.fingerprint,
+          title: memory.title,
+          uri: memoryUri(memory.id),
+        });
       } catch (error) {
         entry.status = "failed:import";
         entry.error = error instanceof Error ? error.message : String(error);
@@ -422,37 +532,40 @@ async function main(): Promise<void> {
       }
     });
 
-    if (importedTitles.length > 0) {
+    if (importedRecords.length > 0) {
       process.stdout.write(
-        `Tagging ${importedTitles.length} source tiddlers with ${NOWLEDGE_MEM_TAG}...\n`,
+        `Recording sync state for ${importedRecords.length} source tiddlers...\n`,
       );
       const entriesByTitle = new Map(
         memories.map((memory) => [memory.title, entriesById.get(memory.id)]),
       );
       try {
-        const tagResults = await tagWikiTiddlers(wikiPaths[0]!, importedTitles);
-        for (const result of tagResults) {
+        const syncResults = await recordWikiSync(
+          wikiPaths[0]!,
+          importedRecords,
+        );
+        for (const result of syncResults) {
           const entry = entriesByTitle.get(result.title);
           if (!entry) {
             throw new Error(`Missing result entry for tiddler ${result.title}.`);
           }
-          entry.sourceTag = result.status;
+          entry.sourceSync = result.status;
           if (result.status === "failed") {
-            entry.status = "imported:tag-failed";
-            entry.error = `Memory imported, but source tagging failed: ${result.error ?? "Unknown error"}`;
+            entry.status = "imported:writeback-failed";
+            entry.error = `Memory imported, but source sync writeback failed: ${result.error ?? "Unknown error"}`;
             summary.failed += 1;
           } else {
-            summary.tagged += 1;
+            summary.recorded += 1;
           }
         }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        for (const title of importedTitles) {
-          const entry = entriesByTitle.get(title);
-          if (entry && !entry.sourceTag) {
-            entry.sourceTag = "failed";
-            entry.status = "imported:tag-failed";
-            entry.error = `Memory imported, but source tagging failed: ${message}`;
+        for (const record of importedRecords) {
+          const entry = entriesByTitle.get(record.title);
+          if (entry && !entry.sourceSync) {
+            entry.sourceSync = "failed";
+            entry.status = "imported:writeback-failed";
+            entry.error = `Memory imported, but source sync writeback failed: ${message}`;
             summary.failed += 1;
           }
         }
@@ -468,7 +581,7 @@ async function main(): Promise<void> {
       `Ready: ${summary.ready}`,
       formatSkippedSummary(summary.skipped),
       `Imported: ${summary.imported}`,
-      `Tagged: ${summary.tagged}`,
+      `Recorded: ${summary.recorded}`,
       `Failed: ${summary.failed}`,
       `Warnings: ${summary.warnings}`,
       ...(!applying && summary.failed === 0

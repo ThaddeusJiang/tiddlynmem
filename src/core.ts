@@ -6,6 +6,10 @@ import { gfm } from "turndown-plugin-gfm";
 
 const DNS_NAMESPACE = "6ba7b810-9dad-11d1-80b4-00c04fd430c8";
 export const NOWLEDGE_MEM_TAG = "$:/NowledgeMem";
+export const NOWLEDGE_MEM_URI_FIELD = "nmem-uri";
+export const NOWLEDGE_MEM_FINGERPRINT_FIELD = "nmem-sync-fingerprint";
+const MEMORY_ID_PATTERN =
+  "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{12}";
 const IMPORTABLE_TYPES = new Set([
   "",
   "text/markdown",
@@ -21,6 +25,8 @@ export interface TiddlerRecord {
   draftTitle?: string;
   html?: string;
   modified?: Date | string;
+  nmemSyncFingerprint?: string;
+  nmemUri?: string;
   renderError?: string;
   tags?: string | string[];
   text: string;
@@ -43,6 +49,7 @@ export type TiddlerClassification =
   | "unsupported_type";
 
 interface ClassificationOptions {
+  includeImported?: boolean;
   includeSensitive?: boolean;
 }
 
@@ -77,7 +84,7 @@ export function classifyTiddler(
   tiddler: TiddlerRecord,
   options: ClassificationOptions = {},
 ): TiddlerClassification {
-  const { includeSensitive = false } = options;
+  const { includeImported = false, includeSensitive = false } = options;
   const title = tiddler.title ?? "";
   const type = tiddler.type ?? "text/vnd.tiddlywiki";
 
@@ -87,7 +94,10 @@ export function classifyTiddler(
   if (tiddler.draftOf || tiddler.draftTitle) {
     return "draft";
   }
-  if (parseTagString(tiddler.tags).includes(NOWLEDGE_MEM_TAG)) {
+  if (
+    !includeImported &&
+    parseTagString(tiddler.tags).includes(NOWLEDGE_MEM_TAG)
+  ) {
     return "imported";
   }
   if (!(tiddler.text ?? "").trim()) {
@@ -100,6 +110,17 @@ export function classifyTiddler(
     return "sensitive";
   }
   return "ready";
+}
+
+export function memoryIdFromUri(uri: string): string | undefined {
+  const match = uri.match(
+    new RegExp(`^nowledgemem://memory/(${MEMORY_ID_PATTERN})$`, "u"),
+  );
+  return match?.[1];
+}
+
+export function memoryUri(memoryId: string): string {
+  return `nowledgemem://memory/${memoryId}`;
 }
 
 export function stableMemoryId(wikiId: string, title: string): string {

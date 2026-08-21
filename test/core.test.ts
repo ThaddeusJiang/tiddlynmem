@@ -7,6 +7,8 @@ import {
   findMediaReferences,
   htmlToMarkdown,
   isSensitiveTitle,
+  memoryIdFromUri,
+  memoryUri,
   NOWLEDGE_MEM_TAG,
   parseTagString,
   resolveWikiId,
@@ -49,13 +51,15 @@ test("classifyTiddler returns a stable skip reason", () => {
   assert.equal(classifyTiddler({ title: "$:/Config", text: "x" }), "system");
   assert.equal(classifyTiddler({ title: "Draft", text: "x", draftTitle: "New" }), "draft");
   assert.equal(classifyTiddler({ title: "Empty", text: "" }), "empty");
+  const imported = {
+    tags: `existing ${NOWLEDGE_MEM_TAG}`,
+    text: "x",
+    title: "Imported",
+  };
+  assert.equal(classifyTiddler(imported), "imported");
   assert.equal(
-    classifyTiddler({
-      tags: `existing ${NOWLEDGE_MEM_TAG}`,
-      text: "x",
-      title: "Imported",
-    }),
-    "imported",
+    classifyTiddler(imported, { includeImported: true }),
+    "ready",
   );
   assert.equal(
     classifyTiddler({ title: "Image", text: "x", type: "image/png" }),
@@ -80,6 +84,14 @@ test("resolveWikiId separates same-named Wiki directories", () => {
   assert.equal(first, same);
   assert.notEqual(first, other);
   assert.equal(resolveWikiId("/notes/one/wiki", "personal-notes"), "personal-notes");
+});
+
+test("Memory URIs preserve deterministic Memory IDs", () => {
+  const id = "12345678-1234-5123-8123-123456789abc";
+
+  assert.equal(memoryUri(id), `nowledgemem://memory/${id}`);
+  assert.equal(memoryIdFromUri(memoryUri(id)), id);
+  assert.equal(memoryIdFromUri("https://example.com/memory/invalid"), undefined);
 });
 
 test("stableMemoryId is stable and separates Wiki identities", () => {
